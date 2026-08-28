@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>EH Assistant - Unit Tests</title>
+    <style>
+      body { font-family: "Segoe UI", Arial, sans-serif; padding: 16px; background: #f7f8fa; color: #182230; }
+      pre { white-space: pre-wrap; font-family: Consolas, monospace; font-size: 13px; line-height: 1.6; }
+      h1 { font-size: 16px; }
+    </style>
+  </head>
+  <body>
+    <h1>EH Assistant 纯函数单元测试</h1>
+    <p>直接在 Chrome 里打开这个文件即可运行；不需要 Node 或任何构建工具。</p>
+    <pre id="output">运行中...</pre>
+
+    <script>
+      // Must be set before content.js loads: gates the test-only export hook
+      // at the bottom of content.js's IIFE so production pages never get it.
+      window.__EH_ASSISTANT_TEST__ = true;
+      // content.js registers a chrome.runtime.onMessage listener at load time;
+      // stub just enough of the extension API so that line doesn't throw here.
+      // Chrome exposes a native window.chrome even on plain pages (no
+      // extension APIs), so `window.chrome || {...}` alone would never take
+      // effect -- only chrome.runtime specifically needs stubbing here.
+      window.chrome = window.chrome || {};
+      window.chrome.runtime = window.chrome.runtime || {
+        onMessage: { addListener: function () {} },
+        sendMessage: function () {}
+      };
+    </script>
+    <script src="../shared/background-classifier.js"></script>
+    <script src="../content.js"></script>
+    <script src="tests.js"></script>
+  </body>
+</html>

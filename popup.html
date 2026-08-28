@@ -16,7 +16,10 @@
             <p>Engage Hub 运营助手</p>
           </div>
         </div>
-          <span class="version">v0.15.0</span>
+        <div class="header-meta">
+          <span class="todo-badge" id="todoBadge" hidden>0</span>
+          <span class="version" id="versionLabel"></span>
+        </div>
       </header>
 
       <nav class="workspace-tabs" aria-label="功能切换">
@@ -51,13 +54,23 @@
         <section class="summary-section">
           <div class="summary-section-head">
             <h2>今日待办</h2>
-            <button id="copyReport" class="icon-button" type="button" title="复制待办日报" aria-label="复制待办日报">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-            </button>
+            <div class="summary-section-actions">
+              <button id="exportCsv" class="icon-button" type="button" title="导出 CSV" aria-label="导出 CSV">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 3v12"></path>
+                  <path d="M7 10l5 5 5-5"></path>
+                  <path d="M4 19h16"></path>
+                </svg>
+              </button>
+              <button id="copyReport" class="icon-button" type="button" title="复制待办日报" aria-label="复制待办日报">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+              </button>
+            </div>
           </div>
+          <input type="search" id="merchantSearch" class="merchant-search" placeholder="搜索 Merchant" aria-label="搜索 Merchant" />
           <div id="summary" class="summary"></div>
         </section>
       </div>

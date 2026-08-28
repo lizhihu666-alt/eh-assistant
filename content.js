@@ -1028,4 +1028,18 @@
       sendResponse({ ok: false, error: error?.message || String(error) });
     }
   });
+
+  // Exposes the pure, DOM-independent checks for tests/tests.html to exercise
+  // directly. Only activates when the test harness sets this flag before
+  // content.js loads, so the real EH page never creates this global.
+  if (typeof window !== "undefined" && window.__EH_ASSISTANT_TEST__) {
+    window.__ehAssistantInternal = {
+      normalizedWords,
+      isTitleCaseWord,
+      titleChecks,
+      languageChecks,
+      descriptionChecks,
+      majorContentChecks
+    };
+  }
 })();

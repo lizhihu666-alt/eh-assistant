@@ -5,6 +5,7 @@ const autoScanOrdersButton = document.getElementById("autoScanOrders");
 const autoScanPricingButton = document.getElementById("autoScanPricing");
 const auditProductButton = document.getElementById("auditProduct");
 const copyButton = document.getElementById("copyReport");
+const exportCsvButton = document.getElementById("exportCsv");
 const clearButton = document.getElementById("clearToday");
 const statusBox = document.getElementById("status");
 const auditStatusBox = document.getElementById("auditStatus");
@@ -13,9 +14,18 @@ const auditResultBox = document.getElementById("auditResult");
 const workspaceTabs = [...document.querySelectorAll("[data-workspace]")];
 const todoWorkspace = document.getElementById("todoWorkspace");
 const auditWorkspace = document.getElementById("auditWorkspace");
+const versionLabel = document.getElementById("versionLabel");
+const todoBadge = document.getElementById("todoBadge");
+const merchantSearchInput = document.getElementById("merchantSearch");
 let summaryView = "todo";
 let oneClickRunning = false;
 let cancelRequested = false;
+let currentSnapshots = [];
+let yesterdaySnapshots = [];
+let searchQuery = "";
+const sortState = {};
+
+versionLabel.textContent = `v${chrome.runtime.getManifest().version}`;
 
 function checkCancelled() {
   if (cancelRequested) throw new Error("已停止巡检，本次未完成的扫描结果不会保存。");
@@ -50,6 +60,58 @@ function todayKey() {
 
 function storageKey() {
   return `ehAssistant:${todayKey()}`;
+}
+
+function shiftedDateKey(offsetDays) {
+  const date = new Date();
+  date.setDate(date.getDate() + offsetDays);
+  return date.toISOString().slice(0, 10);
+}
+
+async function loadYesterdaySnapshots() {
+  const key = `ehAssistant:${shiftedDateKey(-1)}`;
+  const result = await chrome.storage.local.get(key);
+  yesterdaySnapshots = result[key] || [];
+}
+
+const MODULE_FIELDS = {
+  catalogue_merchant_matrix: ["newProducts", "updatedToBeAudit", "syncFailure"],
+  pricing_merchant_matrix: ["toBeUpdated", "pricingFailedUpdate", "costAudit"],
+  order_merchant_matrix: ["awaitingFulfillment", "partiallyFulfilled", "canceled"]
+};
+
+function snapshotRows(snapshots, type) {
+  return snapshots.find(snapshot => snapshot.type === type)?.rows || [];
+}
+
+function moduleTotal(rows, fields) {
+  return rows.reduce((sum, row) => sum + fields.reduce((fieldSum, field) => fieldSum + Number(row[field] || 0), 0), 0);
+}
+
+function totalPendingCount(snapshots) {
+  return Object.entries(MODULE_FIELDS)
+    .reduce((sum, [type, fields]) => sum + moduleTotal(snapshotRows(snapshots, type), fields), 0);
+}
+
+function moduleTrendLabel(type, rows) {
+  const yesterdaySnapshot = yesterdaySnapshots.find(snapshot => snapshot.type === type);
+  if (!yesterdaySnapshot) return "";
+  const fields = MODULE_FIELDS[type];
+  const delta = moduleTotal(rows, fields) - moduleTotal(yesterdaySnapshot.rows || [], fields);
+  if (delta > 0) return `<span class="trend trend-up">▲ +${delta} 较昨日</span>`;
+  if (delta < 0) return `<span class="trend trend-down">▼ ${delta} 较昨日</span>`;
+  return `<span class="trend trend-flat">持平 较昨日</span>`;
+}
+
+function formatScanTime(isoString) {
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function latestScanTime(snapshots) {
+  const timestamps = snapshots.map(snapshot => snapshot.scannedAt).filter(Boolean).sort();
+  return timestamps.length ? formatScanTime(timestamps[timestamps.length - 1]) : "";
 }
 
 function setStatus(text) {
@@ -308,6 +370,27 @@ function pageLine(snapshot) {
   return `${snapshot.label}${tab}: ${merchantCount} 个 merchant`;
 }
 
+const TABLE_COLUMNS = {
+  catalogue: [
+    { key: "merchant", label: "Merchant" },
+    { key: "newProducts", label: "New Product" },
+    { key: "updatedToBeAudit", label: "Updated Audit" },
+    { key: "syncFailure", label: "Sync Failure" }
+  ],
+  pricing: [
+    { key: "merchant", label: "Merchant" },
+    { key: "toBeUpdated", label: "To be Updated" },
+    { key: "pricingFailedUpdate", label: "Pricing Failed Update" },
+    { key: "costAudit", label: "Cost Audit" }
+  ],
+  order: [
+    { key: "merchant", label: "Merchant" },
+    { key: "awaitingFulfillment", label: "Awaiting Fulfillment" },
+    { key: "partiallyFulfilled", label: "Partially Fulfilled" },
+    { key: "canceled", label: "Canceled" }
+  ]
+};
+
 function metricCell(value) {
   const count = Number(value ?? 0);
   return count > 0
@@ -315,97 +398,50 @@ function metricCell(value) {
     : `<td class="metric-cell metric-zero">${escapeHtml(String(count))}</td>`;
 }
 
-function renderMatrixTable(rows) {
-  return `
-    <div class="matrix-wrap">
-      <table class="matrix-table">
-        <colgroup>
-          <col class="merchant-col" />
-          <col />
-          <col />
-          <col />
-        </colgroup>
-        <thead>
-          <tr>
-            <th>Merchant</th>
-            <th>New Product</th>
-            <th>Updated Audit</th>
-            <th>Sync Failure</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.map(row => `
-            <tr>
-              <td class="merchant-cell" title="${escapeHtml(row.merchant)}">${escapeHtml(row.merchant)}</td>
-              ${metricCell(row.newProducts)}
-              ${metricCell(row.updatedToBeAudit)}
-              ${metricCell(row.syncFailure)}
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
-    </div>
-  `;
+function applySearch(rows) {
+  const query = searchQuery.trim().toLowerCase();
+  if (!query) return rows;
+  return rows.filter(row => (row.merchant || "").toLowerCase().includes(query));
 }
 
-function renderOrderMatrixTable(rows) {
-  return `
-    <div class="matrix-wrap">
-      <table class="matrix-table order-matrix">
-        <colgroup>
-          <col class="merchant-col" />
-          <col />
-          <col />
-          <col />
-        </colgroup>
-        <thead>
-          <tr>
-            <th>Merchant</th>
-            <th>Awaiting Fulfillment</th>
-            <th>Partially Fulfilled</th>
-            <th>Canceled</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.map(row => `
-            <tr>
-              <td class="merchant-cell" title="${escapeHtml(row.merchant)}">${escapeHtml(row.merchant)}</td>
-              ${metricCell(row.awaitingFulfillment)}
-              ${metricCell(row.partiallyFulfilled)}
-              ${metricCell(row.canceled)}
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
-    </div>
-  `;
+function sortRows(rows, sort) {
+  if (!sort?.col) return rows;
+  return [...rows].sort((a, b) => {
+    const comparison = sort.col === "merchant"
+      ? String(a.merchant || "").localeCompare(String(b.merchant || ""))
+      : Number(a[sort.col] || 0) - Number(b[sort.col] || 0);
+    return comparison * sort.dir;
+  });
 }
 
-function renderPricingMatrixTable(rows) {
+function sortIndicator(tableKey, colKey) {
+  const sort = sortState[tableKey];
+  if (!sort || sort.col !== colKey) return "";
+  return sort.dir === 1 ? " ▲" : " ▼";
+}
+
+function renderMerchantMatrixTable(tableKey, extraClass, rows) {
+  const columns = TABLE_COLUMNS[tableKey];
+  const sortedRows = sortRows(rows, sortState[tableKey]);
   return `
     <div class="matrix-wrap">
-      <table class="matrix-table pricing-matrix">
+      <table class="matrix-table ${extraClass}">
         <colgroup>
           <col class="merchant-col" />
-          <col />
-          <col />
-          <col />
+          ${columns.slice(1).map(() => "<col />").join("")}
         </colgroup>
         <thead>
           <tr>
-            <th>Merchant</th>
-            <th>To be Updated</th>
-            <th>Pricing Failed Update</th>
-            <th>Cost Audit</th>
+            ${columns.map(column => `
+              <th class="sortable-th" data-table="${tableKey}" data-col="${column.key}">${escapeHtml(column.label)}${sortIndicator(tableKey, column.key)}</th>
+            `).join("")}
           </tr>
         </thead>
         <tbody>
-          ${rows.map(row => `
+          ${sortedRows.map(row => `
             <tr>
               <td class="merchant-cell" title="${escapeHtml(row.merchant)}">${escapeHtml(row.merchant)}</td>
-              ${metricCell(row.toBeUpdated)}
-              ${metricCell(row.pricingFailedUpdate)}
-              ${metricCell(row.costAudit)}
+              ${columns.slice(1).map(column => metricCell(row[column.key])).join("")}
             </tr>
           `).join("")}
         </tbody>
@@ -455,7 +491,54 @@ function buildReport(snapshots) {
   return lines.join("\n");
 }
 
+function csvEscapeField(value) {
+  const text = String(value ?? "");
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function csvTable(rows, columns) {
+  const header = columns.map(column => csvEscapeField(column.label)).join(",");
+  const body = rows.map(row => columns.map(column => csvEscapeField(row[column.key] ?? 0)).join(","));
+  return [header, ...body].join("\r\n");
+}
+
+function buildCsv(snapshots) {
+  const sections = [];
+  const catalogueRows = snapshotRows(snapshots, "catalogue_merchant_matrix");
+  const pricingRows = snapshotRows(snapshots, "pricing_merchant_matrix");
+  const orderRows = snapshotRows(snapshots, "order_merchant_matrix");
+  if (catalogueRows.length) sections.push(`Catalogue Merchant 待办\r\n${csvTable(catalogueRows, TABLE_COLUMNS.catalogue)}`);
+  if (pricingRows.length) sections.push(`Pricing Merchant 待办\r\n${csvTable(pricingRows, TABLE_COLUMNS.pricing)}`);
+  if (orderRows.length) sections.push(`Order Merchant 待办\r\n${csvTable(orderRows, TABLE_COLUMNS.order)}`);
+  return sections.join("\r\n\r\n");
+}
+
+function downloadTextFile(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 function render(snapshots) {
+  currentSnapshots = snapshots;
+  try {
+    renderInner(snapshots);
+  } catch (error) {
+    console.error("EH Assistant render failed", error);
+    summaryBox.innerHTML = `<div class="empty">渲染汇总数据时出错，请清空记录后重新扫描；如果反复出现，请联系维护者。</div>`;
+  }
+}
+
+function renderInner(snapshots) {
+  todoBadge.hidden = !snapshots.length;
+  if (snapshots.length) todoBadge.textContent = String(totalPendingCount(snapshots));
+
   summaryBox.innerHTML = "";
 
   if (!snapshots.length) {
@@ -472,46 +555,61 @@ function render(snapshots) {
     Number(row.updatedToBeAudit || 0) > 0 ||
     Number(row.syncFailure || 0) > 0
   );
-  const displayedMatrixRows = summaryView === "todo" ? todoMatrixRows : allMatrixRows;
+  const displayedMatrixRows = applySearch(summaryView === "todo" ? todoMatrixRows : allMatrixRows);
   const allOrderRows = orderMatrixSnapshot?.rows || [];
   const todoOrderRows = allOrderRows.filter(row =>
     Number(row.awaitingFulfillment || 0) > 0 ||
     Number(row.partiallyFulfilled || 0) > 0 ||
     Number(row.canceled || 0) > 0
   );
-  const displayedOrderRows = summaryView === "todo" ? todoOrderRows : allOrderRows;
+  const displayedOrderRows = applySearch(summaryView === "todo" ? todoOrderRows : allOrderRows);
   const allPricingRows = pricingMatrixSnapshot?.rows || [];
   const todoPricingRows = allPricingRows.filter(row =>
     Number(row.toBeUpdated || 0) > 0 ||
     Number(row.pricingFailedUpdate || 0) > 0 ||
     Number(row.costAudit || 0) > 0
   );
-  const displayedPricingRows = summaryView === "todo" ? todoPricingRows : allPricingRows;
+  const displayedPricingRows = applySearch(summaryView === "todo" ? todoPricingRows : allPricingRows);
   const matrixLines = formatMerchantMatrix(buildMerchantTodoMatrix(snapshots));
   const hasMatrix = !!matrixSnapshot || !!orderMatrixSnapshot || !!pricingMatrixSnapshot;
+  const searchActive = !!searchQuery.trim();
+  const emptyMessage = moduleName => searchActive
+    ? `<div class="empty table-empty">没有匹配的 ${moduleName} Merchant。</div>`
+    : `<div class="empty table-empty">当前没有需要关注的 ${moduleName} Merchant。</div>`;
   const matrixSections = [
     matrixSnapshot ? `
-      <div class="matrix-section-title">Catalogue Merchant 待办</div>
+      <div class="matrix-section-title-row">
+        <span class="matrix-section-title">Catalogue Merchant 待办</span>
+        ${moduleTrendLabel("catalogue_merchant_matrix", allMatrixRows)}
+      </div>
       ${displayedMatrixRows.length
-        ? renderMatrixTable(displayedMatrixRows)
-        : `<div class="empty table-empty">当前没有需要关注的 Catalogue Merchant。</div>`}
+        ? renderMerchantMatrixTable("catalogue", "", displayedMatrixRows)
+        : emptyMessage("Catalogue")}
     ` : "",
     pricingMatrixSnapshot ? `
-      <div class="matrix-section-title">Pricing Merchant 待办</div>
+      <div class="matrix-section-title-row">
+        <span class="matrix-section-title">Pricing Merchant 待办</span>
+        ${moduleTrendLabel("pricing_merchant_matrix", allPricingRows)}
+      </div>
       ${displayedPricingRows.length
-        ? renderPricingMatrixTable(displayedPricingRows)
-        : `<div class="empty table-empty">当前没有需要关注的 Pricing Merchant。</div>`}
+        ? renderMerchantMatrixTable("pricing", "pricing-matrix", displayedPricingRows)
+        : emptyMessage("Pricing")}
     ` : "",
     orderMatrixSnapshot ? `
-      <div class="matrix-section-title">Order Merchant 待办</div>
+      <div class="matrix-section-title-row">
+        <span class="matrix-section-title">Order Merchant 待办</span>
+        ${moduleTrendLabel("order_merchant_matrix", allOrderRows)}
+      </div>
       ${displayedOrderRows.length
-        ? renderOrderMatrixTable(displayedOrderRows)
-        : `<div class="empty table-empty">当前没有需要关注的 Order Merchant。</div>`}
+        ? renderMerchantMatrixTable("order", "order-matrix", displayedOrderRows)
+        : emptyMessage("Order")}
     ` : ""
   ].join("");
+  const scanTime = latestScanTime(snapshots);
   summaryBox.innerHTML = `
     <div class="card">
       <div class="card-title"><span>${todayKey()} 汇总</span><span>${snapshots.length} 项</span></div>
+      ${scanTime ? `<div class="meta">最后更新 ${scanTime}</div>` : ""}
       ${hasMatrix ? `
         <div class="summary-filter" role="group" aria-label="汇总数据筛选">
           <button type="button" data-summary-view="todo" class="${summaryView === "todo" ? "active" : ""}" aria-pressed="${summaryView === "todo"}">待办数据</button>
@@ -527,10 +625,20 @@ function render(snapshots) {
   summaryBox.querySelectorAll("[data-summary-view]").forEach(button => {
     button.addEventListener("click", () => {
       summaryView = button.dataset.summaryView;
-      render(snapshots);
+      render(currentSnapshots);
     });
   });
 
+  summaryBox.querySelectorAll(".sortable-th").forEach(th => {
+    th.addEventListener("click", () => {
+      const tableKey = th.dataset.table;
+      const col = th.dataset.col;
+      const current = sortState[tableKey];
+      const dir = current && current.col === col ? -current.dir : 1;
+      sortState[tableKey] = { col, dir };
+      render(currentSnapshots);
+    });
+  });
 }
 
 function waitForTabComplete(tabId) {
@@ -1111,7 +1219,7 @@ auditProductButton.addEventListener("click", async () => {
   setAuditStatus("正在读取当前商品信息并检查 Media 图片...");
   try {
     const response = await askContentWithInjection(tab.id, { type: "EH_ASSISTANT_AUDIT_PRODUCT" });
-    if (!response) throw new Error("无法连接当前 EH 页面脚本，请确认扩展已更新到 v0.15.0 后重试。");
+    if (!response) throw new Error(`无法连接当前 EH 页面脚本，请确认扩展已更新到 v${chrome.runtime.getManifest().version} 后重试。`);
     if (!response.ok) throw new Error(`审核执行失败：${response.stage || "未知步骤"}；${response.error || "未知错误"}`);
     if (!response.result) throw new Error("页面脚本已连接，但当前网址不是运营端 Catalogue 商品详情路径。");
     const auditResult = await resolveMediaByScreenshot(tab, response.result);
@@ -1138,5 +1246,23 @@ clearButton.addEventListener("click", async () => {
   await refresh();
 });
 
+exportCsvButton.addEventListener("click", async () => {
+  const snapshots = await getSnapshots();
+  const csv = buildCsv(snapshots);
+  if (!csv) {
+    setStatus("当前没有可导出的数据。");
+    return;
+  }
+  const utf8Bom = String.fromCharCode(0xfeff);
+  downloadTextFile(`EH待办统计_${todayKey()}.csv`, utf8Bom + csv, "text/csv;charset=utf-8;");
+  setStatus("待办数据已导出为 CSV。");
+});
+
+merchantSearchInput.addEventListener("input", () => {
+  searchQuery = merchantSearchInput.value;
+  render(currentSnapshots);
+});
+
 setWorkspace(localStorage.getItem("ehAssistantWorkspace") || "todo");
+loadYesterdaySnapshots();
 refresh();
