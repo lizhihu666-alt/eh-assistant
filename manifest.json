@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "EH Assistant",
   "description": "Read-only daily todo summary for Engage Hub.",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "minimum_chrome_version": "114",
   "permissions": ["activeTab", "tabs", "storage", "clipboardWrite", "sidePanel", "scripting"],
   "host_permissions": [

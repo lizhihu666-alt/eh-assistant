@@ -8,7 +8,7 @@
 
 `C:\Users\leohu\Documents\Codex\eh-assistant-mvp`
 
-当前版本：`v0.13.0`
+当前版本：`v0.13.1`
 
 ## 绝对安全边界
 

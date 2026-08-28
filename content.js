@@ -435,6 +435,55 @@
     return { title, description };
   }
 
+  // The Editor Title field renders as a real <input>, and an <input>'s typed
+  // value is never part of document.body.innerText (unlike plain text or a
+  // contenteditable rich-text box, which is how Description is rendered).
+  // So a filled-in Editor title has to be read straight off the DOM element
+  // instead of the innerText line scan readSectionTitleAndDescription uses.
+  function findLeafByExactText(text) {
+    return [...document.querySelectorAll("div,span,p,label,h1,h2,h3,h4")]
+      .filter(element => element.children.length === 0)
+      .filter(isVisible)
+      .find(element => clean(element.textContent) === text) || null;
+  }
+
+  // Scope the search to the Editor block's own container (the nearest
+  // ancestor of the "Editor" heading that actually holds an <input>) rather
+  // than matching by position alone -- Provided-by's "Title" label sits at a
+  // very similar vertical offset in the next column over, so a pure
+  // proximity check can grab the wrong one.
+  function findEditorContainer() {
+    const editorHeading = findLeafByExactText("Editor");
+    if (!editorHeading) return null;
+    let node = editorHeading;
+    for (let depth = 0; depth < 6; depth += 1) {
+      node = node.parentElement;
+      if (!node) return null;
+      if (node.querySelector("input")) return node;
+    }
+    return null;
+  }
+
+  function readEditorTitleInputValue() {
+    const container = findEditorContainer();
+    if (!container) return "";
+    const titleLabel = [...container.querySelectorAll("div,span,p,label")]
+      .filter(element => element.children.length === 0)
+      .filter(isVisible)
+      .find(element => clean(element.textContent) === "Title");
+    if (!titleLabel) return "";
+    const labelRect = titleLabel.getBoundingClientRect();
+    const candidates = [...container.querySelectorAll("input")]
+      .filter(isVisible)
+      .filter(element => ["text", ""].includes((element.getAttribute("type") || "").toLowerCase()));
+    const input = candidates.sort((a, b) => {
+      const distanceA = Math.abs(a.getBoundingClientRect().top - labelRect.bottom);
+      const distanceB = Math.abs(b.getBoundingClientRect().top - labelRect.bottom);
+      return distanceA - distanceB;
+    })[0];
+    return input ? clean(input.value) : "";
+  }
+
   function readProvidedContent() {
     const lines = pageLines();
     const providedIndex = lines.findIndex(line => /^Provided by\s+/i.test(line));
@@ -451,6 +500,7 @@
 
     const provided = readSectionTitleAndDescription(providedScoped);
     const editor = readSectionTitleAndDescription(editorScoped);
+    if (!editor.title) editor.title = readEditorTitleInputValue();
     const headerTitle = clean(document.querySelector(".ant-page-header-heading-title,h1")?.textContent);
 
     // The Editor fields let the merchandising team override the vendor's
