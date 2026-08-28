@@ -700,51 +700,13 @@
       const context = canvas.getContext("2d", { willReadFrequently: true });
       context.drawImage(image, 0, 0, canvas.width, canvas.height);
       const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-      const border = [];
-      const band = Math.max(2, Math.round(Math.min(canvas.width, canvas.height) * 0.08));
-      const step = Math.max(1, Math.floor((canvas.width * canvas.height) / 3500));
-      for (let y = 0; y < canvas.height; y += step) {
-        for (let x = 0; x < canvas.width; x += step) {
-          if (x >= band && x < canvas.width - band && y >= band && y < canvas.height - band) continue;
-          const index = (y * canvas.width + x) * 4;
-          border.push([pixels[index], pixels[index + 1], pixels[index + 2], pixels[index + 3]]);
-        }
-      }
-      const opaque = border.filter(pixel => pixel[3] > 220);
-      if (opaque.length < border.length * 0.8) return { status: "manual", code: "transparent", detail: "图片含透明背景，需人工确认页面呈现颜色" };
-      const cornerSize = Math.max(3, Math.round(Math.min(canvas.width, canvas.height) * 0.12));
-      const cornerOrigins = [
-        [0, 0],
-        [canvas.width - cornerSize, 0],
-        [0, canvas.height - cornerSize],
-        [canvas.width - cornerSize, canvas.height - cornerSize]
-      ];
-      const cornerMeans = cornerOrigins.map(([startX, startY]) => {
-        const samples = [];
-        for (let y = startY; y < startY + cornerSize; y += 1) {
-          for (let x = startX; x < startX + cornerSize; x += 1) {
-            const index = (y * canvas.width + x) * 4;
-            if (pixels[index + 3] > 220) samples.push([pixels[index], pixels[index + 1], pixels[index + 2]]);
-          }
-        }
-        return [0, 1, 2].map(channel => samples.reduce((sum, pixel) => sum + pixel[channel], 0) / Math.max(samples.length, 1));
-      });
-      const colorDistance = (first, second) => Math.hypot(first[0] - second[0], first[1] - second[1], first[2] - second[2]);
-      const dominantCorners = cornerMeans
-        .map(seed => cornerMeans.filter(corner => colorDistance(seed, corner) <= 34))
-        .sort((first, second) => second.length - first.length)[0];
-      const mean = [0, 1, 2].map(channel => dominantCorners.reduce((sum, pixel) => sum + pixel[channel], 0) / dominantCorners.length);
-      const closeRatio = opaque.filter(pixel => colorDistance(pixel, mean) <= 42).length / opaque.length;
-      const isPlainBackground = dominantCorners.length >= 3 || (dominantCorners.length >= 2 && closeRatio >= 0.52);
-      if (!isPlainBackground) return { status: "pass", code: "scene", detail: "识别为场景图或信息图，背景色规则豁免" };
-      const brightness = (mean[0] + mean[1] + mean[2]) / 3;
-      const chroma = Math.max(...mean) - Math.min(...mean);
-      const targetDistance = Math.hypot(mean[0] - 232, mean[1] - 232, mean[2] - 232);
-      const color = `#${mean.map(value => Math.round(value).toString(16).padStart(2, "0")).join("").toUpperCase()}`;
-      const grayEnough = brightness >= 210 && brightness <= 246 && chroma <= 18 && targetDistance <= 42;
-      return grayEnough
-        ? { status: "pass", code: "gray_pass", detail: `纯背景图，背景约为 ${color}` }
-        : { status: "attention", code: "color_mismatch", detail: `纯背景图背景约为 ${color}，与 #E8E8E8 差异较明显` };
+      const classified = window.EHAssistantBackgroundClassifier.classifyBackgroundPixels(pixels, canvas.width, canvas.height);
+      if (classified.code === "no_pixels") return { status: "manual", code: "pixel_unavailable", detail: "图片区域没有可分析像素" };
+      if (classified.code === "transparent") return { status: "manual", code: "transparent", detail: "图片含透明背景，需人工确认页面呈现颜色" };
+      if (classified.code === "scene") return { status: "pass", code: "scene", detail: "识别为场景图或信息图，背景色规则豁免" };
+      return classified.code === "gray_pass"
+        ? { status: "pass", code: "gray_pass", detail: `纯背景图，背景约为 ${classified.color}` }
+        : { status: "attention", code: "color_mismatch", detail: `纯背景图背景约为 ${classified.color}，与 #E8E8E8 差异较明显` };
     } catch (error) {
       const message = String(error?.message || error || "");
       if (/tainted|cross-origin|cross origin|insecure|security/i.test(message) || error?.name === "SecurityError") {

@@ -108,52 +108,13 @@ function loadDataUrlImage(dataUrl) {
 }
 
 function classifyScreenshotPixels(data, width, height) {
-  const border = [];
-  const band = Math.max(2, Math.round(Math.min(width, height) * 0.08));
-  const step = Math.max(1, Math.floor((width * height) / 3500));
-  for (let y = 0; y < height; y += step) {
-    for (let x = 0; x < width; x += step) {
-      if (x >= band && x < width - band && y >= band && y < height - band) continue;
-      const index = (y * width + x) * 4;
-      border.push([data[index], data[index + 1], data[index + 2]]);
-    }
-  }
-  if (!border.length) return { status: "manual", code: "screenshot_failed", detail: "截图区域没有可分析像素" };
-  const cornerSize = Math.max(3, Math.round(Math.min(width, height) * 0.12));
-  const cornerOrigins = [
-    [0, 0],
-    [width - cornerSize, 0],
-    [0, height - cornerSize],
-    [width - cornerSize, height - cornerSize]
-  ];
-  const cornerMeans = cornerOrigins.map(([startX, startY]) => {
-    const samples = [];
-    for (let y = startY; y < startY + cornerSize; y += 1) {
-      for (let x = startX; x < startX + cornerSize; x += 1) {
-        const index = (y * width + x) * 4;
-        samples.push([data[index], data[index + 1], data[index + 2]]);
-      }
-    }
-    return [0, 1, 2].map(channel => samples.reduce((sum, pixel) => sum + pixel[channel], 0) / Math.max(samples.length, 1));
-  });
-  const colorDistance = (first, second) => Math.hypot(first[0] - second[0], first[1] - second[1], first[2] - second[2]);
-  const dominantCorners = cornerMeans
-    .map(seed => cornerMeans.filter(corner => colorDistance(seed, corner) <= 34))
-    .sort((first, second) => second.length - first.length)[0];
-  const mean = [0, 1, 2].map(channel => dominantCorners.reduce((sum, pixel) => sum + pixel[channel], 0) / dominantCorners.length);
-  const closeRatio = border.filter(pixel => colorDistance(pixel, mean) <= 42).length / border.length;
-  const isPlainBackground = dominantCorners.length >= 3 || (dominantCorners.length >= 2 && closeRatio >= 0.52);
-  if (!isPlainBackground) {
-    return { status: "pass", code: "scene", detail: "从页面截图识别为场景图或信息图，背景色规则豁免" };
-  }
-  const brightness = (mean[0] + mean[1] + mean[2]) / 3;
-  const chroma = Math.max(...mean) - Math.min(...mean);
-  const targetDistance = Math.hypot(mean[0] - 232, mean[1] - 232, mean[2] - 232);
-  const color = `#${mean.map(value => Math.round(value).toString(16).padStart(2, "0")).join("").toUpperCase()}`;
-  const grayEnough = brightness >= 210 && brightness <= 246 && chroma <= 18 && targetDistance <= 42;
-  return grayEnough
-    ? { status: "pass", code: "gray_pass", detail: `从页面截图读取，背景约为 ${color}` }
-    : { status: "attention", code: "color_mismatch", detail: `从页面截图读取，背景约为 ${color}，与 #E8E8E8 差异较明显` };
+  const classified = window.EHAssistantBackgroundClassifier.classifyBackgroundPixels(data, width, height);
+  if (classified.code === "no_pixels") return { status: "manual", code: "screenshot_failed", detail: "截图区域没有可分析像素" };
+  if (classified.code === "transparent") return { status: "manual", code: "transparent", detail: "图片含透明背景，需人工确认页面呈现颜色" };
+  if (classified.code === "scene") return { status: "pass", code: "scene", detail: "从页面截图识别为场景图或信息图，背景色规则豁免" };
+  return classified.code === "gray_pass"
+    ? { status: "pass", code: "gray_pass", detail: `从页面截图读取，背景约为 ${classified.color}` }
+    : { status: "attention", code: "color_mismatch", detail: `从页面截图读取，背景约为 ${classified.color}，与 #E8E8E8 差异较明显` };
 }
 
 async function resolveMediaByScreenshot(tab, result) {
@@ -594,7 +555,7 @@ async function askContentWithInjection(tabId, message) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ["content.js"]
+      files: ["shared/background-classifier.js", "content.js"]
     });
     await delay(250);
     response = await sendContentMessage(tabId, message);

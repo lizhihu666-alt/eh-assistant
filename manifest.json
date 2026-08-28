@@ -33,7 +33,7 @@
         "https://admin.engagehub.tsostech.com/*",
         "https://engagehub.tsostech.com/*"
       ],
-      "js": ["content.js"],
+      "js": ["shared/background-classifier.js", "content.js"],
       "run_at": "document_idle"
     }
   ],
