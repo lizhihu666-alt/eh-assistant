@@ -418,23 +418,54 @@
     return lines[index + 1] || "";
   }
 
+  // A field label ("Title"/"Description"/...) immediately following another
+  // field's label line means that field is empty in the UI (no value line
+  // was rendered in between) rather than the next label being its value.
+  const CONTENT_FIELD_LABELS = /^(Title|Description|Meta Title|Meta Description|Variant and Media|Editor)$/i;
+
+  function readSectionTitleAndDescription(scoped) {
+    const titleIndex = scoped.findIndex(line => /^Title$/i.test(line));
+    const descriptionIndex = scoped.findIndex((line, index) => index > titleIndex && /^Description$/i.test(line));
+    const descriptionEnd = scoped.findIndex((line, index) => index > descriptionIndex && /^(Meta Title|Meta Description|Variant and Media)$/i.test(line));
+    const titleValue = titleIndex >= 0 ? scoped[titleIndex + 1] || "" : "";
+    const title = CONTENT_FIELD_LABELS.test(titleValue) ? "" : titleValue;
+    const description = descriptionIndex >= 0
+      ? scoped.slice(descriptionIndex + 1, descriptionEnd > descriptionIndex ? descriptionEnd : scoped.length).join("\n")
+      : "";
+    return { title, description };
+  }
+
   function readProvidedContent() {
     const lines = pageLines();
     const providedIndex = lines.findIndex(line => /^Provided by\s+/i.test(line));
     const editorIndex = lines.findIndex((line, index) => index > providedIndex && /^Editor$/i.test(line));
-    const scoped = providedIndex >= 0
+    const providedScoped = providedIndex >= 0
       ? lines.slice(providedIndex, editorIndex > providedIndex ? editorIndex : Math.min(lines.length, providedIndex + 80))
       : lines;
-    const titleIndex = scoped.findIndex(line => /^Title$/i.test(line));
-    const descriptionIndex = scoped.findIndex((line, index) => index > titleIndex && /^Description$/i.test(line));
-    const descriptionEnd = scoped.findIndex((line, index) => index > descriptionIndex && /^(Meta Title|Meta Description|Variant and Media)$/i.test(line));
+    const editorScoped = editorIndex >= 0
+      ? (() => {
+          const boundaryIndex = lines.findIndex((line, index) => index > editorIndex && /^(Meta Title|Meta Description|Variant and Media)$/i.test(line));
+          return lines.slice(editorIndex, boundaryIndex > editorIndex ? boundaryIndex : Math.min(lines.length, editorIndex + 80));
+        })()
+      : [];
+
+    const provided = readSectionTitleAndDescription(providedScoped);
+    const editor = readSectionTitleAndDescription(editorScoped);
     const headerTitle = clean(document.querySelector(".ant-page-header-heading-title,h1")?.textContent);
-    const title = titleIndex >= 0 ? scoped[titleIndex + 1] || headerTitle : headerTitle;
-    const description = descriptionIndex >= 0
-      ? scoped.slice(descriptionIndex + 1, descriptionEnd > descriptionIndex ? descriptionEnd : scoped.length).join("\n")
-      : "";
-    const provider = providedIndex >= 0 ? scoped[0].replace(/^Provided by\s+/i, "") : "";
-    return { title, description, provider };
+
+    // The Editor fields let the merchandising team override the vendor's
+    // Provided-by copy. When Editor actually filled in a field, that is the
+    // copy customers see, so audit it instead of the untouched vendor text.
+    const title = editor.title || provided.title || headerTitle;
+    const description = editor.description || provided.description;
+    const provider = providedIndex >= 0 ? clean(providedScoped[0]).replace(/^Provided by\s+/i, "") : "";
+    return {
+      title,
+      description,
+      provider,
+      titleSource: editor.title ? "editor" : "provided",
+      descriptionSource: editor.description ? "editor" : "provided"
+    };
   }
 
   function readBasicValue(label) {
@@ -806,12 +837,14 @@
     const brandNames = [...new Set([product.productBrand, product.vendor, product.provider].filter(Boolean))];
     const checks = [];
     onStage("检查标题与 Description");
+    const titleSourceNote = product.titleSource === "editor" ? "（审核的是 Editor 覆盖后的标题）" : "";
+    const descriptionSourceNote = product.descriptionSource === "editor" ? "（审核的是 Editor 覆盖后的 Description）" : "";
     const titleIssues = titleChecks(product.title, brandNames);
-    checks.push({ label: "标题规范", status: titleIssues.length ? "attention" : "pass", detail: titleIssues.join("；") || "5–10 个词、Title Case，且未包含品牌名。" });
+    checks.push({ label: "标题规范", status: titleIssues.length ? "attention" : "pass", detail: (titleIssues.join("；") || "5–10 个词、Title Case，且未包含品牌名。") + titleSourceNote });
     const languageIssues = languageChecks(product.title, product.description);
     checks.push({ label: "错别字与大小写", status: languageIssues.length ? "attention" : "pass", detail: languageIssues.join("；") || "未发现明显的拼写、重复词或标点问题。" });
     const seoIssues = descriptionChecks(product.description);
-    checks.push({ label: "Description", status: seoIssues.length ? "attention" : "pass", detail: seoIssues.join("；") || "未发现明显的 SEO 关键词堆砌或重复内容。" });
+    checks.push({ label: "Description", status: seoIssues.length ? "attention" : "pass", detail: (seoIssues.join("；") || "未发现明显的 SEO 关键词堆砌或重复内容。") + descriptionSourceNote });
     const majorIssues = majorContentChecks(product.description);
     checks.push({ label: "明显内容错误", status: majorIssues.length ? "attention" : "pass", detail: majorIssues.join("；") || "未发现网址、联系方式等明显内容问题。材质近似表达不作严格比对。" });
     onStage("加载并检查 Variant 价格表");

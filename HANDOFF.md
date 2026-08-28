@@ -52,6 +52,7 @@
 
 运营端 Catalogue 商品详情页支持以下只读检查：
 
+- Title / Description 逐字段判断：若 Editor 对应字段已填写实际内容，则审核 Editor 内容；Editor 该字段为空时回退审核 Provided by 内容。审核结果会标注当前检查的是 Editor 覆盖内容还是 Provided by 内容。
 - 标题为 5–10 个英文词。
 - 标题使用 Title Case。
 - 标题不能包含品牌名。
