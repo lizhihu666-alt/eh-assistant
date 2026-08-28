@@ -1078,7 +1078,7 @@ auditProductButton.addEventListener("click", async () => {
   setAuditStatus("正在读取当前商品信息并检查 Media 图片...");
   try {
     const response = await askContentWithInjection(tab.id, { type: "EH_ASSISTANT_AUDIT_PRODUCT" });
-    if (!response) throw new Error("无法连接当前 EH 页面脚本，请确认扩展已更新到 v0.12.1 后重试。");
+    if (!response) throw new Error("无法连接当前 EH 页面脚本，请确认扩展已更新到 v0.13.0 后重试。");
     if (!response.ok) throw new Error(`审核执行失败：${response.stage || "未知步骤"}；${response.error || "未知错误"}`);
     if (!response.result) throw new Error("页面脚本已连接，但当前网址不是运营端 Catalogue 商品详情路径。");
     const auditResult = await resolveMediaByScreenshot(tab, response.result);
