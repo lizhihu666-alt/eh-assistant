@@ -279,6 +279,13 @@ function pageLine(snapshot) {
   return `${snapshot.label}${tab}: ${merchantCount} 个 merchant`;
 }
 
+function metricCell(value) {
+  const count = Number(value ?? 0);
+  return count > 0
+    ? `<td class="metric-cell"><span class="metric-badge">${escapeHtml(String(count))}</span></td>`
+    : `<td class="metric-cell metric-zero">${escapeHtml(String(count))}</td>`;
+}
+
 function renderMatrixTable(rows) {
   return `
     <div class="matrix-wrap">
@@ -301,9 +308,9 @@ function renderMatrixTable(rows) {
           ${rows.map(row => `
             <tr>
               <td class="merchant-cell" title="${escapeHtml(row.merchant)}">${escapeHtml(row.merchant)}</td>
-              <td>${escapeHtml(String(row.newProducts ?? 0))}</td>
-              <td>${escapeHtml(String(row.updatedToBeAudit ?? 0))}</td>
-              <td>${escapeHtml(String(row.syncFailure ?? 0))}</td>
+              ${metricCell(row.newProducts)}
+              ${metricCell(row.updatedToBeAudit)}
+              ${metricCell(row.syncFailure)}
             </tr>
           `).join("")}
         </tbody>
@@ -334,9 +341,9 @@ function renderOrderMatrixTable(rows) {
           ${rows.map(row => `
             <tr>
               <td class="merchant-cell" title="${escapeHtml(row.merchant)}">${escapeHtml(row.merchant)}</td>
-              <td>${escapeHtml(String(row.awaitingFulfillment ?? 0))}</td>
-              <td>${escapeHtml(String(row.partiallyFulfilled ?? 0))}</td>
-              <td>${escapeHtml(String(row.canceled ?? 0))}</td>
+              ${metricCell(row.awaitingFulfillment)}
+              ${metricCell(row.partiallyFulfilled)}
+              ${metricCell(row.canceled)}
             </tr>
           `).join("")}
         </tbody>
@@ -367,9 +374,9 @@ function renderPricingMatrixTable(rows) {
           ${rows.map(row => `
             <tr>
               <td class="merchant-cell" title="${escapeHtml(row.merchant)}">${escapeHtml(row.merchant)}</td>
-              <td>${escapeHtml(String(row.toBeUpdated ?? 0))}</td>
-              <td>${escapeHtml(String(row.pricingFailedUpdate ?? 0))}</td>
-              <td>${escapeHtml(String(row.costAudit ?? 0))}</td>
+              ${metricCell(row.toBeUpdated)}
+              ${metricCell(row.pricingFailedUpdate)}
+              ${metricCell(row.costAudit)}
             </tr>
           `).join("")}
         </tbody>
@@ -1078,7 +1085,7 @@ auditProductButton.addEventListener("click", async () => {
   setAuditStatus("正在读取当前商品信息并检查 Media 图片...");
   try {
     const response = await askContentWithInjection(tab.id, { type: "EH_ASSISTANT_AUDIT_PRODUCT" });
-    if (!response) throw new Error("无法连接当前 EH 页面脚本，请确认扩展已更新到 v0.13.1 后重试。");
+    if (!response) throw new Error("无法连接当前 EH 页面脚本，请确认扩展已更新到 v0.14.0 后重试。");
     if (!response.ok) throw new Error(`审核执行失败：${response.stage || "未知步骤"}；${response.error || "未知错误"}`);
     if (!response.result) throw new Error("页面脚本已连接，但当前网址不是运营端 Catalogue 商品详情路径。");
     const auditResult = await resolveMediaByScreenshot(tab, response.result);
