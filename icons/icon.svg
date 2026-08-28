@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="EH Assistant">
+  <rect width="128" height="128" rx="24" fill="#101828"/>
+  <path fill="#FFFFFF" d="M24 30h38v12H36v16h22v12H36v16h26v12H24z"/>
+  <path fill="#4F8CFF" d="M68 30h12v28h20V30h12v68h-12V70H80v28H68z"/>
+  <circle cx="106" cy="22" r="10" fill="#101828"/>
+  <circle cx="106" cy="22" r="6" fill="#20C997"/>
+</svg>

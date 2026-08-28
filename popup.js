@@ -1,0 +1,1186 @@
+const scanAllButton = document.getElementById("scanAll");
+const autoScanCatalogueButton = document.getElementById("autoScanCatalogue");
+const autoScanOrdersButton = document.getElementById("autoScanOrders");
+const autoScanPricingButton = document.getElementById("autoScanPricing");
+const auditProductButton = document.getElementById("auditProduct");
+const copyButton = document.getElementById("copyReport");
+const clearButton = document.getElementById("clearToday");
+const statusBox = document.getElementById("status");
+const auditStatusBox = document.getElementById("auditStatus");
+const summaryBox = document.getElementById("summary");
+const auditResultBox = document.getElementById("auditResult");
+const workspaceTabs = [...document.querySelectorAll("[data-workspace]")];
+const todoWorkspace = document.getElementById("todoWorkspace");
+const auditWorkspace = document.getElementById("auditWorkspace");
+let summaryView = "todo";
+let oneClickRunning = false;
+
+function todayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function storageKey() {
+  return `ehAssistant:${todayKey()}`;
+}
+
+function setStatus(text) {
+  statusBox.textContent = text;
+}
+
+function setAuditStatus(text) {
+  auditStatusBox.textContent = text;
+}
+
+function setWorkspace(workspace) {
+  const activeWorkspace = workspace === "audit" ? "audit" : "todo";
+  todoWorkspace.hidden = activeWorkspace !== "todo";
+  auditWorkspace.hidden = activeWorkspace !== "audit";
+  workspaceTabs.forEach(button => {
+    const active = button.dataset.workspace === activeWorkspace;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  localStorage.setItem("ehAssistantWorkspace", activeWorkspace);
+}
+
+workspaceTabs.forEach(button => {
+  button.addEventListener("click", () => setWorkspace(button.dataset.workspace));
+});
+
+function auditTone(status) {
+  if (status === "attention") return { label: "需要关注", className: "attention" };
+  if (status === "manual") return { label: "人工查看", className: "manual" };
+  return { label: "通过", className: "pass" };
+}
+
+function renderProductAudit(result) {
+  const checks = result?.checks || [];
+  const attentionCount = checks.filter(item => item.status === "attention").length;
+  const manualCount = checks.filter(item => item.status === "manual").length;
+  auditResultBox.hidden = false;
+  auditResultBox.innerHTML = `
+    <div class="audit-result-head">
+      <div>
+        <h2>商品审核结果</h2>
+        <div class="audit-product-title">${escapeHtml(result?.product?.title || "当前商品")}</div>
+      </div>
+      <span class="audit-overall ${attentionCount ? "attention" : manualCount ? "manual" : "pass"}">
+        ${attentionCount ? `${attentionCount} 项需关注` : manualCount ? `${manualCount} 项需查看` : "检查通过"}
+      </span>
+    </div>
+    <div class="audit-checks">
+      ${checks.map(check => {
+        const tone = auditTone(check.status);
+        return `
+          <div class="audit-check ${tone.className}">
+            <div class="audit-check-head">
+              <strong>${escapeHtml(check.label)}</strong>
+              <span>${tone.label}</span>
+            </div>
+            <div class="audit-check-detail">${escapeHtml(check.detail)}</div>
+          </div>
+        `;
+      }).join("")}
+    </div>
+    <div class="audit-note">辅助结果仅用于提示，最终由运营人员判断。插件不会点击 Approved 或 Rejected。</div>
+  `;
+}
+
+function captureVisibleTab(windowId) {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.captureVisibleTab(windowId, { format: "png" }, dataUrl => {
+      if (chrome.runtime.lastError || !dataUrl) {
+        reject(new Error(chrome.runtime.lastError?.message || "无法截取当前页面"));
+        return;
+      }
+      resolve(dataUrl);
+    });
+  });
+}
+
+function loadDataUrlImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("页面截图加载失败"));
+    image.src = dataUrl;
+  });
+}
+
+function classifyScreenshotPixels(data, width, height) {
+  const border = [];
+  const band = Math.max(2, Math.round(Math.min(width, height) * 0.08));
+  const step = Math.max(1, Math.floor((width * height) / 3500));
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      if (x >= band && x < width - band && y >= band && y < height - band) continue;
+      const index = (y * width + x) * 4;
+      border.push([data[index], data[index + 1], data[index + 2]]);
+    }
+  }
+  if (!border.length) return { status: "manual", code: "screenshot_failed", detail: "截图区域没有可分析像素" };
+  const cornerSize = Math.max(3, Math.round(Math.min(width, height) * 0.12));
+  const cornerOrigins = [
+    [0, 0],
+    [width - cornerSize, 0],
+    [0, height - cornerSize],
+    [width - cornerSize, height - cornerSize]
+  ];
+  const cornerMeans = cornerOrigins.map(([startX, startY]) => {
+    const samples = [];
+    for (let y = startY; y < startY + cornerSize; y += 1) {
+      for (let x = startX; x < startX + cornerSize; x += 1) {
+        const index = (y * width + x) * 4;
+        samples.push([data[index], data[index + 1], data[index + 2]]);
+      }
+    }
+    return [0, 1, 2].map(channel => samples.reduce((sum, pixel) => sum + pixel[channel], 0) / Math.max(samples.length, 1));
+  });
+  const colorDistance = (first, second) => Math.hypot(first[0] - second[0], first[1] - second[1], first[2] - second[2]);
+  const dominantCorners = cornerMeans
+    .map(seed => cornerMeans.filter(corner => colorDistance(seed, corner) <= 34))
+    .sort((first, second) => second.length - first.length)[0];
+  const mean = [0, 1, 2].map(channel => dominantCorners.reduce((sum, pixel) => sum + pixel[channel], 0) / dominantCorners.length);
+  const closeRatio = border.filter(pixel => colorDistance(pixel, mean) <= 42).length / border.length;
+  const isPlainBackground = dominantCorners.length >= 3 || (dominantCorners.length >= 2 && closeRatio >= 0.52);
+  if (!isPlainBackground) {
+    return { status: "pass", code: "scene", detail: "从页面截图识别为场景图或信息图，背景色规则豁免" };
+  }
+  const brightness = (mean[0] + mean[1] + mean[2]) / 3;
+  const chroma = Math.max(...mean) - Math.min(...mean);
+  const targetDistance = Math.hypot(mean[0] - 232, mean[1] - 232, mean[2] - 232);
+  const color = `#${mean.map(value => Math.round(value).toString(16).padStart(2, "0")).join("").toUpperCase()}`;
+  const grayEnough = brightness >= 210 && brightness <= 246 && chroma <= 18 && targetDistance <= 42;
+  return grayEnough
+    ? { status: "pass", code: "gray_pass", detail: `从页面截图读取，背景约为 ${color}` }
+    : { status: "attention", code: "color_mismatch", detail: `从页面截图读取，背景约为 ${color}，与 #E8E8E8 差异较明显` };
+}
+
+async function resolveMediaByScreenshot(tab, result) {
+  const checkIndex = (result.checks || []).findIndex(check => check.label === "图片背景");
+  if (checkIndex < 0) return result;
+  const mediaCheck = result.checks[checkIndex];
+  const unresolvedCodes = new Set(["pixel_blocked", "load_failed", "pixel_unavailable"]);
+  if (!(mediaCheck.imageResults || []).some(item => item.status === "manual" && unresolvedCodes.has(item.code))) return result;
+
+  setAuditStatus("图片源限制像素读取，正在改用当前页面截图检查背景...");
+  let updatedResults = mediaCheck.imageResults.map(item => ({ ...item }));
+  try {
+    const dataUrl = await captureVisibleTab(tab.windowId);
+    const screenshot = await loadDataUrlImage(dataUrl);
+    const viewport = mediaCheck.viewport || {};
+    const scaleX = screenshot.naturalWidth / Math.max(1, viewport.width || screenshot.naturalWidth);
+    const scaleY = screenshot.naturalHeight / Math.max(1, viewport.height || screenshot.naturalHeight);
+    const canvas = document.createElement("canvas");
+    canvas.width = screenshot.naturalWidth;
+    canvas.height = screenshot.naturalHeight;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.drawImage(screenshot, 0, 0);
+
+    updatedResults = updatedResults.map(item => {
+      if (item.status !== "manual" || !unresolvedCodes.has(item.code)) return item;
+      const rect = item.rect || {};
+      const fullyVisible = rect.left >= 0 && rect.top >= 0 &&
+        rect.left + rect.width <= (viewport.width || 0) &&
+        rect.top + rect.height <= (viewport.height || 0);
+      if (!fullyVisible || rect.width < 20 || rect.height < 20) {
+        return { ...item, code: "outside_viewport", detail: "图片不在当前页面截图的可见区域" };
+      }
+      const inset = Math.min(3, rect.width * 0.04, rect.height * 0.04);
+      const x = Math.max(0, Math.round((rect.left + inset) * scaleX));
+      const y = Math.max(0, Math.round((rect.top + inset) * scaleY));
+      const width = Math.min(canvas.width - x, Math.max(1, Math.round((rect.width - inset * 2) * scaleX)));
+      const height = Math.min(canvas.height - y, Math.max(1, Math.round((rect.height - inset * 2) * scaleY)));
+      if (width < 10 || height < 10) return { ...item, code: "screenshot_failed", detail: "截图中的图片区域过小" };
+      try {
+        return { ...item, ...classifyScreenshotPixels(context.getImageData(x, y, width, height).data, width, height) };
+      } catch (error) {
+        return { ...item, status: "manual", code: "screenshot_failed", detail: `截图像素分析失败：${error?.message || error}` };
+      }
+    });
+  } catch (error) {
+    updatedResults = updatedResults.map(item => unresolvedCodes.has(item.code)
+      ? { ...item, code: "screenshot_failed", detail: `${item.detail}；页面截图备用方案失败：${error?.message || error}` }
+      : item);
+  }
+
+  const summary = await sendContentMessage(tab.id, {
+    type: "EH_ASSISTANT_SUMMARIZE_MEDIA_RESULTS",
+    results: updatedResults
+  });
+  const replacement = summary?.ok ? { label: "图片背景", ...summary.check } : mediaCheck;
+  return { ...result, checks: result.checks.map((check, index) => index === checkIndex ? replacement : check) };
+}
+
+async function getSnapshots() {
+  const key = storageKey();
+  const result = await chrome.storage.local.get(key);
+  return result[key] || [];
+}
+
+async function saveSnapshot(snapshot) {
+  const key = storageKey();
+  const snapshots = await getSnapshots();
+  const filtered = snapshots.filter(item => item.key !== snapshot.key || item.tab !== snapshot.tab || item.url !== snapshot.url);
+  filtered.push(snapshot);
+  await chrome.storage.local.set({ [key]: filtered });
+  return filtered;
+}
+
+function addCounts(target, source) {
+  Object.entries(source || {}).forEach(([key, value]) => {
+    target[key] = (target[key] || 0) + value;
+  });
+  return target;
+}
+
+function buildMerchantTodoMatrix(snapshots) {
+  const matrix = {};
+  snapshots.forEach(snapshot => {
+    if (snapshot.type === "catalogue_merchant_matrix") {
+      snapshot.rows.forEach(row => {
+        matrix[row.merchant] = matrix[row.merchant] || {};
+        matrix[row.merchant]["New Products"] = row.newProducts || 0;
+        matrix[row.merchant]["Updated to be Audit"] = row.updatedToBeAudit || 0;
+        matrix[row.merchant]["Sync Failure"] = row.syncFailure || 0;
+      });
+      return;
+    }
+    const todoType = snapshot.todoType || snapshot.tab || snapshot.label;
+    const merchantFilterCounts = snapshot.merchantFilterCounts || {};
+    if (Object.keys(merchantFilterCounts).length) {
+      Object.entries(merchantFilterCounts).forEach(([merchant, count]) => {
+        matrix[merchant] = matrix[merchant] || {};
+        matrix[merchant][todoType] = (matrix[merchant][todoType] || 0) + count;
+      });
+      return;
+    }
+    const rows = snapshot.rowSummaries || [];
+    if (rows.length) {
+      rows.forEach(row => {
+        const merchant = row.merchant || "Unknown";
+        matrix[merchant] = matrix[merchant] || {};
+        matrix[merchant][todoType] = (matrix[merchant][todoType] || 0) + 1;
+      });
+      return;
+    }
+    Object.entries(snapshot.merchantCounts || {}).forEach(([merchant, count]) => {
+      matrix[merchant] = matrix[merchant] || {};
+      matrix[merchant][todoType] = (matrix[merchant][todoType] || 0) + count;
+    });
+  });
+  return matrix;
+}
+
+function formatMerchantMatrix(matrix) {
+  const merchants = Object.keys(matrix).sort();
+  if (!merchants.length) return ["- 当前记录未读取到 Merchant / Brand 列。"];
+  return merchants.map(merchant => {
+    const parts = Object.entries(matrix[merchant])
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([type, count]) => `${type}: ${count}`)
+      .join("；");
+    return `- ${merchant}: ${parts}`;
+  });
+}
+
+function formatMatrixTable(rows) {
+  if (!rows?.length) return ["| Merchant | New Product | Updated to be Audit | Sync Failure |", "|---|---:|---:|---:|"];
+  const lines = ["| Merchant | New Product | Updated to be Audit | Sync Failure |", "|---|---:|---:|---:|"];
+  rows.forEach(row => {
+    lines.push(`| ${row.merchant} | ${row.newProducts || 0} | ${row.updatedToBeAudit || 0} | ${row.syncFailure || 0} |`);
+  });
+  return lines;
+}
+
+function formatOrderMatrixTable(rows) {
+  const lines = ["| Merchant | Awaiting Fulfillment | Partially Fulfilled | Canceled |", "|---|---:|---:|---:|"];
+  (rows || []).forEach(row => {
+    lines.push(`| ${row.merchant} | ${row.awaitingFulfillment || 0} | ${row.partiallyFulfilled || 0} | ${row.canceled || 0} |`);
+  });
+  return lines;
+}
+
+function formatPricingMatrixTable(rows) {
+  const lines = ["| Merchant | To be Updated | Pricing Failed Update | Cost Audit |", "|---|---:|---:|---:|"];
+  (rows || []).forEach(row => {
+    lines.push(`| ${row.merchant} | ${row.toBeUpdated || 0} | ${row.pricingFailedUpdate || 0} | ${row.costAudit || 0} |`);
+  });
+  return lines;
+}
+
+function sectionNumber(value) {
+  return ["", "一", "二", "三", "四", "五", "六"][value] || String(value);
+}
+
+function formatCounts(counts) {
+  const entries = Object.entries(counts || {});
+  if (!entries.length) return "无";
+  return entries.map(([key, value]) => `${key}: ${value}`).join("；");
+}
+
+function pageLine(snapshot) {
+  const tab = snapshot.tab ? ` / ${snapshot.tab}` : "";
+  const merchantCount = Object.keys(snapshot.merchantFilterCounts || snapshot.merchantCounts || {}).length;
+  return `${snapshot.label}${tab}: ${merchantCount} 个 merchant`;
+}
+
+function renderMatrixTable(rows) {
+  return `
+    <div class="matrix-wrap">
+      <table class="matrix-table">
+        <colgroup>
+          <col class="merchant-col" />
+          <col />
+          <col />
+          <col />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Merchant</th>
+            <th>New Product</th>
+            <th>Updated Audit</th>
+            <th>Sync Failure</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(row => `
+            <tr>
+              <td class="merchant-cell" title="${escapeHtml(row.merchant)}">${escapeHtml(row.merchant)}</td>
+              <td>${escapeHtml(String(row.newProducts ?? 0))}</td>
+              <td>${escapeHtml(String(row.updatedToBeAudit ?? 0))}</td>
+              <td>${escapeHtml(String(row.syncFailure ?? 0))}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderOrderMatrixTable(rows) {
+  return `
+    <div class="matrix-wrap">
+      <table class="matrix-table order-matrix">
+        <colgroup>
+          <col class="merchant-col" />
+          <col />
+          <col />
+          <col />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Merchant</th>
+            <th>Awaiting Fulfillment</th>
+            <th>Partially Fulfilled</th>
+            <th>Canceled</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(row => `
+            <tr>
+              <td class="merchant-cell" title="${escapeHtml(row.merchant)}">${escapeHtml(row.merchant)}</td>
+              <td>${escapeHtml(String(row.awaitingFulfillment ?? 0))}</td>
+              <td>${escapeHtml(String(row.partiallyFulfilled ?? 0))}</td>
+              <td>${escapeHtml(String(row.canceled ?? 0))}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderPricingMatrixTable(rows) {
+  return `
+    <div class="matrix-wrap">
+      <table class="matrix-table pricing-matrix">
+        <colgroup>
+          <col class="merchant-col" />
+          <col />
+          <col />
+          <col />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Merchant</th>
+            <th>To be Updated</th>
+            <th>Pricing Failed Update</th>
+            <th>Cost Audit</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(row => `
+            <tr>
+              <td class="merchant-cell" title="${escapeHtml(row.merchant)}">${escapeHtml(row.merchant)}</td>
+              <td>${escapeHtml(String(row.toBeUpdated ?? 0))}</td>
+              <td>${escapeHtml(String(row.pricingFailedUpdate ?? 0))}</td>
+              <td>${escapeHtml(String(row.costAudit ?? 0))}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function buildReport(snapshots) {
+  const catalogueSnapshot = snapshots.find(snapshot => snapshot.type === "catalogue_merchant_matrix");
+  const orderSnapshot = snapshots.find(snapshot => snapshot.type === "order_merchant_matrix");
+  const pricingSnapshot = snapshots.find(snapshot => snapshot.type === "pricing_merchant_matrix");
+  const catalogueRows = (catalogueSnapshot?.rows || []).filter(row =>
+    Number(row.newProducts || 0) > 0 ||
+    Number(row.updatedToBeAudit || 0) > 0 ||
+    Number(row.syncFailure || 0) > 0
+  );
+  const orderRows = (orderSnapshot?.rows || []).filter(row =>
+    Number(row.awaitingFulfillment || 0) > 0 ||
+    Number(row.partiallyFulfilled || 0) > 0 ||
+    Number(row.canceled || 0) > 0
+  );
+  const pricingRows = (pricingSnapshot?.rows || []).filter(row =>
+    Number(row.toBeUpdated || 0) > 0 ||
+    Number(row.pricingFailedUpdate || 0) > 0 ||
+    Number(row.costAudit || 0) > 0
+  );
+  const lines = [`EH 每日待办统计（${todayKey()}）`];
+  const totalTodoMerchants = catalogueRows.length + orderRows.length + pricingRows.length;
+  if (!totalTodoMerchants) return `${lines[0]}\n\n当前暂无待办数据。`;
+
+  let section = 1;
+  if (catalogueRows.length) {
+    lines.push("", `${sectionNumber(section)}、Catalogue Merchant 待办`);
+    lines.push(...formatMatrixTable(catalogueRows));
+    section += 1;
+  }
+  if (pricingRows.length) {
+    lines.push("", `${sectionNumber(section)}、Pricing Merchant 待办`);
+    lines.push(...formatPricingMatrixTable(pricingRows));
+    section += 1;
+  }
+  if (orderRows.length) {
+    lines.push("", `${sectionNumber(section)}、Order Merchant 待办`);
+    lines.push(...formatOrderMatrixTable(orderRows));
+  }
+  return lines.join("\n");
+}
+
+function render(snapshots) {
+  summaryBox.innerHTML = "";
+
+  if (!snapshots.length) {
+    summaryBox.innerHTML = `<div class="empty">今天还没有扫描记录。</div>`;
+    return;
+  }
+
+  const matrixSnapshot = snapshots.find(snapshot => snapshot.type === "catalogue_merchant_matrix");
+  const orderMatrixSnapshot = snapshots.find(snapshot => snapshot.type === "order_merchant_matrix");
+  const pricingMatrixSnapshot = snapshots.find(snapshot => snapshot.type === "pricing_merchant_matrix");
+  const allMatrixRows = matrixSnapshot?.rows || [];
+  const todoMatrixRows = allMatrixRows.filter(row =>
+    Number(row.newProducts || 0) > 0 ||
+    Number(row.updatedToBeAudit || 0) > 0 ||
+    Number(row.syncFailure || 0) > 0
+  );
+  const displayedMatrixRows = summaryView === "todo" ? todoMatrixRows : allMatrixRows;
+  const allOrderRows = orderMatrixSnapshot?.rows || [];
+  const todoOrderRows = allOrderRows.filter(row =>
+    Number(row.awaitingFulfillment || 0) > 0 ||
+    Number(row.partiallyFulfilled || 0) > 0 ||
+    Number(row.canceled || 0) > 0
+  );
+  const displayedOrderRows = summaryView === "todo" ? todoOrderRows : allOrderRows;
+  const allPricingRows = pricingMatrixSnapshot?.rows || [];
+  const todoPricingRows = allPricingRows.filter(row =>
+    Number(row.toBeUpdated || 0) > 0 ||
+    Number(row.pricingFailedUpdate || 0) > 0 ||
+    Number(row.costAudit || 0) > 0
+  );
+  const displayedPricingRows = summaryView === "todo" ? todoPricingRows : allPricingRows;
+  const totals = [];
+  if (matrixSnapshot) {
+    totals.push(summaryView === "todo"
+      ? `Catalogue 待办 Merchant：${todoMatrixRows.length} / ${allMatrixRows.length} 个`
+      : `Catalogue Merchant：${allMatrixRows.length} 个`);
+  }
+  if (pricingMatrixSnapshot) {
+    totals.push(summaryView === "todo"
+      ? `Pricing 待办 Merchant：${todoPricingRows.length} / ${allPricingRows.length} 个`
+      : `Pricing Merchant：${allPricingRows.length} 个`);
+  }
+  if (orderMatrixSnapshot) {
+    totals.push(summaryView === "todo"
+      ? `Order 待办 Merchant：${todoOrderRows.length} / ${allOrderRows.length} 个`
+      : `Order Merchant：${allOrderRows.length} 个`);
+  }
+  const matrixLines = formatMerchantMatrix(buildMerchantTodoMatrix(snapshots));
+  const hasMatrix = !!matrixSnapshot || !!orderMatrixSnapshot || !!pricingMatrixSnapshot;
+  const matrixSections = [
+    matrixSnapshot ? `
+      <div class="matrix-section-title">Catalogue Merchant 待办</div>
+      ${displayedMatrixRows.length
+        ? renderMatrixTable(displayedMatrixRows)
+        : `<div class="empty table-empty">当前没有需要关注的 Catalogue Merchant。</div>`}
+    ` : "",
+    pricingMatrixSnapshot ? `
+      <div class="matrix-section-title">Pricing Merchant 待办</div>
+      ${displayedPricingRows.length
+        ? renderPricingMatrixTable(displayedPricingRows)
+        : `<div class="empty table-empty">当前没有需要关注的 Pricing Merchant。</div>`}
+    ` : "",
+    orderMatrixSnapshot ? `
+      <div class="matrix-section-title">Order Merchant 待办</div>
+      ${displayedOrderRows.length
+        ? renderOrderMatrixTable(displayedOrderRows)
+        : `<div class="empty table-empty">当前没有需要关注的 Order Merchant。</div>`}
+    ` : ""
+  ].join("");
+  summaryBox.innerHTML = `
+    <div class="card">
+      <div class="card-title"><span>${todayKey()} 汇总</span><span>${snapshots.length} 项</span></div>
+      ${totals.map(line => `<div class="line">${escapeHtml(line)}</div>`).join("")}
+      ${hasMatrix ? `
+        <div class="summary-filter" role="group" aria-label="汇总数据筛选">
+          <button type="button" data-summary-view="todo" class="${summaryView === "todo" ? "active" : ""}" aria-pressed="${summaryView === "todo"}">待办数据</button>
+          <button type="button" data-summary-view="all" class="${summaryView === "all" ? "active" : ""}" aria-pressed="${summaryView === "all"}">汇总数据</button>
+        </div>
+      ` : ""}
+      ${hasMatrix
+        ? matrixSections
+        : `<div class="line"><strong>Merchant 维度</strong></div>${matrixLines.map(line => `<div class="line">${escapeHtml(line.replace(/^- /, ""))}</div>`).join("")}`}
+    </div>
+  `;
+
+  summaryBox.querySelectorAll("[data-summary-view]").forEach(button => {
+    button.addEventListener("click", () => {
+      summaryView = button.dataset.summaryView;
+      render(snapshots);
+    });
+  });
+
+}
+
+function waitForTabComplete(tabId) {
+  return new Promise(resolve => {
+    const timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }, 12000);
+    function listener(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        clearTimeout(timeout);
+        chrome.tabs.onUpdated.removeListener(listener);
+        setTimeout(resolve, 900);
+      }
+    }
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function sendContentMessage(tabId, message) {
+  return new Promise(resolve => {
+    chrome.tabs.sendMessage(tabId, message, response => {
+      if (chrome.runtime.lastError) resolve(null);
+      else resolve(response || null);
+    });
+  });
+}
+
+async function askContent(tabId, message) {
+  const response = await sendContentMessage(tabId, message);
+  return response?.ok ? response : null;
+}
+
+async function askContentWithInjection(tabId, message) {
+  let response = await sendContentMessage(tabId, message);
+  if (response) return response;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content.js"]
+    });
+    await delay(250);
+    response = await sendContentMessage(tabId, message);
+    return response;
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function waitForEhDataReady(tabId, label) {
+  let lastReadiness = null;
+  let stableHits = 0;
+  for (let attempt = 1; attempt <= 30; attempt += 1) {
+    const response = await askContent(tabId, { type: "EH_ASSISTANT_READY" });
+    const readiness = response?.readiness;
+    if (readiness) {
+      const signature = `${readiness.rowCount}:${readiness.total}:${readiness.hasNoData}:${readiness.loading}`;
+      const lastSignature = lastReadiness
+        ? `${lastReadiness.rowCount}:${lastReadiness.total}:${lastReadiness.hasNoData}:${lastReadiness.loading}`
+        : "";
+      stableHits = signature === lastSignature ? stableHits + 1 : 0;
+      lastReadiness = readiness;
+      if (readiness.ready && stableHits >= 1) return readiness;
+      setStatus(`等待 ${label} 数据加载... 行数 ${readiness.rowCount}，总数 ${readiness.total ?? "读取中"}`);
+    } else {
+      setStatus(`等待 ${label} 页面脚本加载...`);
+    }
+    await delay(1000);
+  }
+  return lastReadiness;
+}
+
+async function scanActiveTab(tabId) {
+  const response = await askContent(tabId, { type: "EH_ASSISTANT_SCAN" });
+  return response?.snapshot || null;
+}
+
+async function listMerchants(tabId) {
+  const response = await askContent(tabId, { type: "EH_ASSISTANT_LIST_MERCHANTS" });
+  return response?.result?.merchants || [];
+}
+
+async function selectMerchant(tabId, merchant) {
+  const response = await askContent(tabId, { type: "EH_ASSISTANT_SELECT_MERCHANT", merchant });
+  return !!response?.result?.selected;
+}
+
+async function currentRowCount(tabId) {
+  const response = await askContent(tabId, { type: "EH_ASSISTANT_ROW_COUNT" });
+  return Number(response?.count || 0);
+}
+
+async function goFirstPage(tabId) {
+  const response = await askContent(tabId, { type: "EH_ASSISTANT_FIRST_PAGE" });
+  return !!response?.clicked;
+}
+
+async function goNextPage(tabId) {
+  const response = await askContent(tabId, { type: "EH_ASSISTANT_NEXT_PAGE" });
+  return !!response?.clicked;
+}
+
+async function clickCatalogueTab(tabId, label) {
+  const response = await askContent(tabId, { type: "EH_ASSISTANT_CLICK_CATALOGUE_TAB", label });
+  return !!response?.clicked;
+}
+
+async function waitForActiveStatusTab(tabId, label) {
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    const response = await askContent(tabId, { type: "EH_ASSISTANT_ACTIVE_STATUS_TAB" });
+    if (response?.label === label) return true;
+    await delay(250);
+  }
+  return false;
+}
+
+async function openEhPage(tabId, url, label) {
+  const current = await chrome.tabs.get(tabId);
+  const completed = waitForTabComplete(tabId);
+  if (current.url === url) {
+    await chrome.tabs.reload(tabId);
+  } else {
+    await chrome.tabs.update(tabId, { url });
+  }
+  await completed;
+  return waitForEhDataReady(tabId, label);
+}
+
+async function waitForPath(tabId, pathname) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const current = await chrome.tabs.get(tabId);
+    try {
+      if (new URL(current.url).pathname === pathname) return true;
+    } catch (_error) {
+      // Keep waiting while Chrome reports an intermediate navigation URL.
+    }
+    await delay(250);
+  }
+  return false;
+}
+
+async function readMerchantCounts(tabId) {
+  const response = await askContent(tabId, { type: "EH_ASSISTANT_MERCHANT_COUNTS" });
+  return response?.result || null;
+}
+
+function catalogueScanUrl(currentUrl, tabValue, page) {
+  const url = new URL(currentUrl);
+  url.searchParams.set("tab", tabValue);
+  url.searchParams.set("page", String(page));
+  url.searchParams.set("page_size", "100");
+  return url.toString();
+}
+
+function createMerchantSnapshot(baseSnapshot, tabConfig, merchantResult) {
+  const fallbackCounts = baseSnapshot?.merchantCounts || {};
+  const merchantFilterCounts = merchantResult?.counts || {};
+  return {
+    ...baseSnapshot,
+    key: "admin_catalogue_auto",
+    label: `运营端 Catalogue - ${tabConfig.label}`,
+    tab: tabConfig.value,
+    todoType: tabConfig.label,
+    url: baseSnapshot?.url || "",
+    scannedAt: new Date().toISOString(),
+    totalItems: null,
+    merchantFilterSource: merchantResult?.source || "fallback_table",
+    merchantFilterCounts,
+    merchantCounts: Object.keys(merchantFilterCounts).length ? merchantFilterCounts : fallbackCounts
+  };
+}
+
+async function countCurrentMerchantTabRows(tabId, label) {
+  const readiness = await waitForEhDataReady(tabId, label);
+  // EH already exposes the count for every page in the pagination footer.
+  // It includes every page, so it is both faster and more reliable than
+  // adding only the rows currently rendered by its virtualised table.
+  if (readiness?.hasNoData) return 0;
+  if (Number.isFinite(readiness?.total)) return readiness.total;
+
+  // Keep a row-by-row fallback only for an unexpected page without a footer.
+  await goFirstPage(tabId);
+  await waitForEhDataReady(tabId, `${label} 第 1 页`);
+  let total = 0;
+  const seen = new Set();
+  for (let page = 1; page <= 50; page += 1) {
+    await waitForEhDataReady(tabId, `${label} 第 ${page} 页`);
+    const snapshot = await scanActiveTab(tabId);
+    const url = snapshot?.url || "";
+    const signature = `${url}|${snapshot?.visibleRows ?? ""}|${snapshot?.rowSummaries?.map(row => row.product).join("~") || ""}`;
+    if (seen.has(signature)) break;
+    seen.add(signature);
+    total += await currentRowCount(tabId);
+    const moved = await goNextPage(tabId);
+    if (!moved) break;
+    await delay(900);
+  }
+  return total;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, char => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;"
+  })[char]);
+}
+
+async function refresh() {
+  render(await getSnapshots());
+}
+
+async function snapshotTimestamp(key) {
+  return (await getSnapshots()).find(snapshot => snapshot.key === key)?.scannedAt || "";
+}
+
+async function runScanButtonAndWait(button, snapshotKey, label) {
+  const previousTimestamp = await snapshotTimestamp(snapshotKey);
+  button.click();
+
+  let started = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (button.disabled) {
+      started = true;
+      break;
+    }
+    await delay(100);
+  }
+  if (!started) throw new Error(`${label} 未能启动。`);
+
+  for (let attempt = 0; attempt < 14400; attempt += 1) {
+    if (!button.disabled) {
+      const nextTimestamp = await snapshotTimestamp(snapshotKey);
+      if (nextTimestamp && nextTimestamp !== previousTimestamp) return;
+      throw new Error(statusBox.textContent || `${label} 未生成新的扫描结果。`);
+    }
+    await delay(250);
+  }
+  throw new Error(`${label} 扫描超时，已停止一键巡检。`);
+}
+
+scanAllButton.addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id || !/^https:\/\/admin\.engagehub\.tsostech\.com\//.test(tab.url || "")) {
+    setStatus("请先打开任意运营端 EH 页面。");
+    return;
+  }
+
+  oneClickRunning = true;
+  scanAllButton.disabled = true;
+  const jobs = [
+    {
+      label: "Catalogue",
+      url: "https://admin.engagehub.tsostech.com/catalogue?tab=ALL&page=1&page_size=20&channel=1&search_field=model",
+      button: autoScanCatalogueButton,
+      snapshotKey: "admin_catalogue_merchant_matrix"
+    },
+    {
+      label: "Pricing",
+      url: "https://admin.engagehub.tsostech.com/pricing",
+      button: autoScanPricingButton,
+      snapshotKey: "admin_pricing_merchant_matrix"
+    },
+    {
+      label: "Order",
+      url: "https://admin.engagehub.tsostech.com/order-list",
+      button: autoScanOrdersButton,
+      snapshotKey: "admin_order_merchant_matrix"
+    }
+  ];
+
+  try {
+    for (let index = 0; index < jobs.length; index += 1) {
+      const job = jobs[index];
+      setStatus(`一键巡检 ${index + 1}/${jobs.length}：正在准备 ${job.label}...`);
+      await openEhPage(tab.id, job.url, job.label);
+      await runScanButtonAndWait(job.button, job.snapshotKey, job.label);
+      await refresh();
+    }
+    setStatus("一键巡检完成：Catalogue、Pricing、Order 均已更新。");
+  } catch (error) {
+    setStatus(error?.message || "一键巡检失败，已停止。");
+  } finally {
+    oneClickRunning = false;
+    scanAllButton.disabled = false;
+    autoScanCatalogueButton.disabled = false;
+    autoScanPricingButton.disabled = false;
+    autoScanOrdersButton.disabled = false;
+  }
+});
+
+autoScanCatalogueButton.addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id || !/https:\/\/admin\.engagehub\.tsostech\.com\/catalogue/.test(tab.url || "")) {
+    setStatus("请先打开运营端 Catalogue 页面。");
+    return;
+  }
+
+  autoScanCatalogueButton.disabled = true;
+  autoScanOrdersButton.disabled = true;
+  autoScanPricingButton.disabled = true;
+  scanAllButton.disabled = true;
+  const tabConfigs = [
+    { value: "NEW_PRODUCTS", label: "New Products" },
+    { value: "UPDATED_TO_BE_AUDIT", label: "Updated to be Audit" },
+    { value: "SYNC_FAILURE", label: "Sync Failure" }
+  ];
+
+  const combinedSnapshots = [];
+  try {
+    // Reloading guarantees the active EH tab receives the same content-script
+    // version as this popup after the unpacked extension has been refreshed.
+    setStatus("正在准备 EH 页面...");
+    await chrome.tabs.reload(tab.id);
+    await waitForTabComplete(tab.id);
+    await waitForEhDataReady(tab.id, "Catalogue");
+
+    // Opening Merchant only reads its selectable names. No count is ever read
+    // from All; each merchant is counted only after New Products is selected.
+    setStatus("正在打开 Merchant 列表...");
+    let merchants = await listMerchants(tab.id);
+    merchants = [...new Set(merchants)].filter(Boolean);
+    if (!merchants.length) {
+      setStatus("没有读取到 Merchant 列表，请确认 Merchant 筛选可打开。");
+      return;
+    }
+    setStatus(`已读取 ${merchants.length} 个 Merchant，开始逐个扫描...`);
+    await delay(500);
+
+    const rows = [];
+    for (let merchantIndex = 0; merchantIndex < merchants.length; merchantIndex += 1) {
+      const merchant = merchants[merchantIndex];
+      setStatus(`正在选择 Merchant ${merchantIndex + 1}/${merchants.length}: ${merchant}`);
+      let selected = false;
+      for (let attempt = 0; attempt < 3 && !selected; attempt += 1) {
+        selected = await selectMerchant(tab.id, merchant);
+        if (!selected) await delay(500);
+      }
+      if (!selected) {
+        throw new Error(`无法选择 Merchant：${merchant}，扫描已停止。`);
+      }
+
+      const row = { merchant, newProducts: 0, updatedToBeAudit: 0, syncFailure: 0 };
+      for (const tabConfig of tabConfigs) {
+        setStatus(`正在统计 ${merchant} / ${tabConfig.label}...`);
+        let clicked = false;
+        for (let attempt = 0; attempt < 3 && !clicked; attempt += 1) {
+          clicked = await clickCatalogueTab(tab.id, tabConfig.label);
+          if (!clicked) await delay(350);
+        }
+        if (!clicked) {
+          throw new Error(`无法点击 ${tabConfig.label}，扫描已停止，Merchant 筛选未刷新。`);
+        }
+        if (!await waitForActiveStatusTab(tab.id, tabConfig.label)) {
+          throw new Error(`${tabConfig.label} 未完成切换，扫描已停止。`);
+        }
+        await waitForEhDataReady(tab.id, `${merchant} / ${tabConfig.label}`);
+        const count = await countCurrentMerchantTabRows(tab.id, `${merchant} / ${tabConfig.label}`);
+        if (tabConfig.value === "NEW_PRODUCTS") row.newProducts = count;
+        if (tabConfig.value === "UPDATED_TO_BE_AUDIT") row.updatedToBeAudit = count;
+        if (tabConfig.value === "SYNC_FAILURE") row.syncFailure = count;
+      }
+      rows.push(row);
+    }
+
+    combinedSnapshots.push({
+      type: "catalogue_merchant_matrix",
+      key: "admin_catalogue_merchant_matrix",
+      label: "运营端 Catalogue Merchant 待办",
+      scannedAt: new Date().toISOString(),
+      rows
+    });
+
+    const key = storageKey();
+    const existing = await getSnapshots();
+    const withoutOldCatalogue = existing.filter(item => item.key !== "admin_catalogue_auto" && item.key !== "admin_catalogue_merchant_matrix");
+    const next = [...withoutOldCatalogue, ...combinedSnapshots];
+    await chrome.storage.local.set({ [key]: next });
+    setStatus(`自动扫描完成：${rows.length} 个 merchant。`);
+    render(next);
+  } catch (error) {
+    setStatus(error?.message || "自动扫描失败，已停止且没有刷新 Merchant 筛选。");
+  } finally {
+    autoScanCatalogueButton.disabled = false;
+    autoScanOrdersButton.disabled = false;
+    autoScanPricingButton.disabled = false;
+    if (!oneClickRunning) scanAllButton.disabled = false;
+  }
+});
+
+autoScanOrdersButton.addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id || !/https:\/\/admin\.engagehub\.tsostech\.com\/order-list/.test(tab.url || "")) {
+    setStatus("请先打开运营端 Order List 页面。");
+    return;
+  }
+
+  autoScanOrdersButton.disabled = true;
+  autoScanCatalogueButton.disabled = true;
+  autoScanPricingButton.disabled = true;
+  scanAllButton.disabled = true;
+  const tabConfigs = [
+    { field: "awaitingFulfillment", label: "Awaiting Fulfillment" },
+    { field: "partiallyFulfilled", label: "Partially Fulfilled" },
+    { field: "canceled", label: "Canceled" }
+  ];
+
+  try {
+    setStatus("正在准备 Order List 页面...");
+    await chrome.tabs.reload(tab.id);
+    await waitForTabComplete(tab.id);
+    await waitForEhDataReady(tab.id, "Order List");
+
+    setStatus("正在打开 Order Merchant 列表...");
+    let merchants = await listMerchants(tab.id);
+    merchants = [...new Set(merchants)].filter(Boolean);
+    if (!merchants.length) {
+      setStatus("没有读取到 Order Merchant 列表，请确认 Merchant 筛选可打开。");
+      return;
+    }
+    setStatus(`已读取 ${merchants.length} 个 Order Merchant，开始逐个扫描...`);
+    await delay(500);
+
+    const rows = [];
+    for (let merchantIndex = 0; merchantIndex < merchants.length; merchantIndex += 1) {
+      const merchant = merchants[merchantIndex];
+      setStatus(`Order ${merchantIndex + 1}/${merchants.length}：正在选择 ${merchant}`);
+      let selected = false;
+      for (let attempt = 0; attempt < 3 && !selected; attempt += 1) {
+        selected = await selectMerchant(tab.id, merchant);
+        if (!selected) await delay(500);
+      }
+      if (!selected) {
+        throw new Error(`无法选择 Order Merchant：${merchant}，扫描已停止。`);
+      }
+
+      const row = { merchant, awaitingFulfillment: 0, partiallyFulfilled: 0, canceled: 0 };
+      for (const tabConfig of tabConfigs) {
+        setStatus(`正在统计 Order / ${merchant} / ${tabConfig.label}...`);
+        let clicked = false;
+        for (let attempt = 0; attempt < 3 && !clicked; attempt += 1) {
+          clicked = await clickCatalogueTab(tab.id, tabConfig.label);
+          if (!clicked) await delay(350);
+        }
+        if (!clicked) {
+          throw new Error(`无法点击 Order ${tabConfig.label}，扫描已停止。`);
+        }
+        if (!await waitForActiveStatusTab(tab.id, tabConfig.label)) {
+          throw new Error(`Order ${tabConfig.label} 未完成切换，扫描已停止。`);
+        }
+        const count = await countCurrentMerchantTabRows(tab.id, `Order / ${merchant} / ${tabConfig.label}`);
+        row[tabConfig.field] = count;
+      }
+      rows.push(row);
+    }
+
+    const orderSnapshot = {
+      type: "order_merchant_matrix",
+      key: "admin_order_merchant_matrix",
+      label: "运营端 Order Merchant 待办",
+      scannedAt: new Date().toISOString(),
+      rows
+    };
+    const key = storageKey();
+    const existing = await getSnapshots();
+    const withoutOldOrders = existing.filter(item => item.key !== "admin_order_merchant_matrix");
+    const next = [...withoutOldOrders, orderSnapshot];
+    await chrome.storage.local.set({ [key]: next });
+    setStatus(`Order 自动扫描完成：${rows.length} 个 Merchant。`);
+    render(next);
+  } catch (error) {
+    setStatus(error?.message || "Order 自动扫描失败，已停止。");
+  } finally {
+    autoScanOrdersButton.disabled = false;
+    autoScanCatalogueButton.disabled = false;
+    autoScanPricingButton.disabled = false;
+    if (!oneClickRunning) scanAllButton.disabled = false;
+  }
+});
+
+autoScanPricingButton.addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id || !/https:\/\/admin\.engagehub\.tsostech\.com\/pricing(?:\/|$)/.test(tab.url || "")) {
+    setStatus("请先打开运营端 Pricing 页面。");
+    return;
+  }
+
+  autoScanPricingButton.disabled = true;
+  autoScanCatalogueButton.disabled = true;
+  autoScanOrdersButton.disabled = true;
+  scanAllButton.disabled = true;
+  const pricingUrl = "https://admin.engagehub.tsostech.com/pricing";
+  const pageConfigs = [
+    { field: "toBeUpdated", label: "To be Updated", pathname: "/pricing", navigates: false },
+    { field: "pricingFailedUpdate", label: "Pricing Failed Update", pathname: "/pricing/failed-update", navigates: true },
+    { field: "costAudit", label: "Cost Audit", pathname: "/pricing/cost-audit", navigates: true }
+  ];
+
+  try {
+    const rowMap = new Map();
+    const merchantOrder = [];
+
+    for (let pageIndex = 0; pageIndex < pageConfigs.length; pageIndex += 1) {
+      const pageConfig = pageConfigs[pageIndex];
+      setStatus(`Pricing ${pageIndex + 1}/${pageConfigs.length}：正在返回 Pricing 并打开 ${pageConfig.label}...`);
+      await openEhPage(tab.id, pricingUrl, "Pricing");
+
+      const navigation = pageConfig.navigates ? waitForTabComplete(tab.id) : null;
+      let clicked = false;
+      for (let attempt = 0; attempt < 3 && !clicked; attempt += 1) {
+        clicked = await clickCatalogueTab(tab.id, pageConfig.label);
+        if (!clicked) await delay(350);
+      }
+      if (!clicked) throw new Error(`无法打开 Pricing / ${pageConfig.label}，扫描已停止。`);
+
+      if (pageConfig.navigates) {
+        await navigation;
+        if (!await waitForPath(tab.id, pageConfig.pathname)) {
+          throw new Error(`${pageConfig.label} 页面未完成跳转，扫描已停止。`);
+        }
+      } else if (!await waitForActiveStatusTab(tab.id, pageConfig.label)) {
+        throw new Error(`${pageConfig.label} 未完成切换，扫描已停止。`);
+      }
+      await waitForEhDataReady(tab.id, `Pricing / ${pageConfig.label}`);
+
+      setStatus(`正在读取 ${pageConfig.label} 的 Merchant 列表...`);
+      let merchants = await listMerchants(tab.id);
+      merchants = [...new Set(merchants)].filter(Boolean);
+      if (!merchants.length) {
+        throw new Error(`${pageConfig.label} 没有读取到 Merchant 列表，扫描已停止。`);
+      }
+
+      for (let merchantIndex = 0; merchantIndex < merchants.length; merchantIndex += 1) {
+        const merchant = merchants[merchantIndex];
+        if (!rowMap.has(merchant)) {
+          rowMap.set(merchant, { merchant, toBeUpdated: 0, pricingFailedUpdate: 0, costAudit: 0 });
+          merchantOrder.push(merchant);
+        }
+        setStatus(`Pricing ${pageIndex + 1}/${pageConfigs.length} · Merchant ${merchantIndex + 1}/${merchants.length}：${merchant}`);
+        let selected = false;
+        for (let attempt = 0; attempt < 3 && !selected; attempt += 1) {
+          selected = await selectMerchant(tab.id, merchant);
+          if (!selected) await delay(500);
+        }
+        if (!selected) {
+          throw new Error(`${pageConfig.label} 无法选择 Merchant：${merchant}，扫描已停止。`);
+        }
+        rowMap.get(merchant)[pageConfig.field] = await countCurrentMerchantTabRows(
+          tab.id,
+          `Pricing / ${pageConfig.label} / ${merchant}`
+        );
+      }
+    }
+
+    const rows = merchantOrder.map(merchant => rowMap.get(merchant));
+    const pricingSnapshot = {
+      type: "pricing_merchant_matrix",
+      key: "admin_pricing_merchant_matrix",
+      label: "运营端 Pricing Merchant 待办",
+      scannedAt: new Date().toISOString(),
+      rows
+    };
+    const key = storageKey();
+    const existing = await getSnapshots();
+    const withoutOldPricing = existing.filter(item => item.key !== "admin_pricing_merchant_matrix");
+    const next = [...withoutOldPricing, pricingSnapshot];
+    await chrome.storage.local.set({ [key]: next });
+    setStatus(`Pricing 自动扫描完成：${rows.length} 个 Merchant。`);
+    render(next);
+  } catch (error) {
+    setStatus(error?.message || "Pricing 自动扫描失败，已停止。");
+  } finally {
+    autoScanPricingButton.disabled = false;
+    autoScanCatalogueButton.disabled = false;
+    autoScanOrdersButton.disabled = false;
+    if (!oneClickRunning) scanAllButton.disabled = false;
+  }
+});
+
+auditProductButton.addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id || !/^https:\/\/admin\.engagehub\.tsostech\.com\//.test(tab.url || "")) {
+    setAuditStatus("请先打开运营端 Catalogue 商品详情页。");
+    return;
+  }
+
+  auditProductButton.disabled = true;
+  auditResultBox.hidden = true;
+  setAuditStatus("正在读取当前商品信息并检查 Media 图片...");
+  try {
+    const response = await askContentWithInjection(tab.id, { type: "EH_ASSISTANT_AUDIT_PRODUCT" });
+    if (!response) throw new Error("无法连接当前 EH 页面脚本，请确认扩展已更新到 v0.12.1 后重试。");
+    if (!response.ok) throw new Error(`审核执行失败：${response.stage || "未知步骤"}；${response.error || "未知错误"}`);
+    if (!response.result) throw new Error("页面脚本已连接，但当前网址不是运营端 Catalogue 商品详情路径。");
+    const auditResult = await resolveMediaByScreenshot(tab, response.result);
+    renderProductAudit(auditResult);
+    const attentionCount = auditResult.checks.filter(item => item.status === "attention").length;
+    const manualCount = auditResult.checks.filter(item => item.status === "manual").length;
+    setAuditStatus(`商品检查完成：${attentionCount} 项需关注，${manualCount} 项需人工查看。`);
+  } catch (error) {
+    setAuditStatus(error?.message || "商品辅助审核失败，请重试。");
+  } finally {
+    auditProductButton.disabled = false;
+  }
+});
+
+copyButton.addEventListener("click", async () => {
+  const report = buildReport(await getSnapshots());
+  await navigator.clipboard.writeText(report);
+  setStatus("待办日报已复制。");
+});
+
+clearButton.addEventListener("click", async () => {
+  await chrome.storage.local.remove(storageKey());
+  setStatus("今日记录已清空。");
+  await refresh();
+});
+
+setWorkspace(localStorage.getItem("ehAssistantWorkspace") || "todo");
+refresh();

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EH Assistant</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="app-header">
+        <div class="brand-lockup">
+          <img class="brand-logo" src="icons/icon.svg" alt="" width="40" height="40" />
+          <div>
+            <h1>EH Assistant</h1>
+            <p>Engage Hub 运营助手</p>
+          </div>
+        </div>
+          <span class="version">v0.12.1</span>
+      </header>
+
+      <nav class="workspace-tabs" aria-label="功能切换">
+        <button type="button" class="workspace-tab active" data-workspace="todo" aria-selected="true">待办巡检</button>
+        <button type="button" class="workspace-tab" data-workspace="audit" aria-selected="false">商品审核</button>
+      </nav>
+
+      <div id="todoWorkspace" class="workspace-panel">
+        <section class="workspace-heading">
+          <div>
+            <h2>待办巡检</h2>
+            <p>按 Merchant 汇总 Catalogue、Pricing 与 Order 待办</p>
+          </div>
+        </section>
+
+        <section class="actions" aria-label="巡检操作">
+          <button id="scanAll" class="primary one-click">一键巡检</button>
+          <div class="action-label">专项巡检</div>
+          <div class="module-actions">
+            <button id="autoScanCatalogue">Catalogue</button>
+            <button id="autoScanPricing">Pricing</button>
+            <button id="autoScanOrders">Order</button>
+          </div>
+          <div class="utility-actions">
+            <button id="copyReport">复制待办日报</button>
+            <button id="clearToday" class="ghost">清空记录</button>
+          </div>
+        </section>
+
+        <section class="status" id="status" aria-live="polite">准备就绪</section>
+
+        <section class="summary-section">
+          <h2>今日待办</h2>
+          <div id="summary" class="summary"></div>
+        </section>
+      </div>
+
+      <div id="auditWorkspace" class="workspace-panel" hidden>
+        <section class="workspace-heading audit-heading">
+          <div>
+            <h2>Catalogue 商品审核</h2>
+            <p>检查当前商品的文案、价格字段与图片背景</p>
+          </div>
+          <button id="auditProduct" class="primary audit-button">审核当前商品</button>
+        </section>
+
+        <section class="status" id="auditStatus" aria-live="polite">打开 Catalogue 商品详情页后开始审核</section>
+        <section id="auditResult" class="audit-result" aria-live="polite" hidden></section>
+      </div>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
