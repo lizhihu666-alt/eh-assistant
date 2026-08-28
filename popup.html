@@ -16,7 +16,7 @@
             <p>Engage Hub 运营助手</p>
           </div>
         </div>
-          <span class="version">v0.14.0</span>
+          <span class="version">v0.15.0</span>
       </header>
 
       <nav class="workspace-tabs" aria-label="功能切换">
@@ -34,6 +34,7 @@
 
         <section class="actions" aria-label="巡检操作">
           <button id="scanAll" class="primary one-click">一键巡检</button>
+          <button id="stopScan" class="ghost stop-scan" type="button" hidden>停止巡检</button>
           <div class="action-label">专项巡检</div>
           <div class="module-actions">
             <button id="autoScanCatalogue">Catalogue</button>
@@ -41,7 +42,6 @@
             <button id="autoScanOrders">Order</button>
           </div>
           <div class="utility-actions">
-            <button id="copyReport">复制待办日报</button>
             <button id="clearToday" class="ghost">清空记录</button>
           </div>
         </section>
@@ -49,7 +49,15 @@
         <section class="status" id="status" aria-live="polite">准备就绪</section>
 
         <section class="summary-section">
-          <h2>今日待办</h2>
+          <div class="summary-section-head">
+            <h2>今日待办</h2>
+            <button id="copyReport" class="icon-button" type="button" title="复制待办日报" aria-label="复制待办日报">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
           <div id="summary" class="summary"></div>
         </section>
       </div>

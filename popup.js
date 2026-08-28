@@ -1,4 +1,5 @@
 const scanAllButton = document.getElementById("scanAll");
+const stopScanButton = document.getElementById("stopScan");
 const autoScanCatalogueButton = document.getElementById("autoScanCatalogue");
 const autoScanOrdersButton = document.getElementById("autoScanOrders");
 const autoScanPricingButton = document.getElementById("autoScanPricing");
@@ -14,6 +15,34 @@ const todoWorkspace = document.getElementById("todoWorkspace");
 const auditWorkspace = document.getElementById("auditWorkspace");
 let summaryView = "todo";
 let oneClickRunning = false;
+let cancelRequested = false;
+
+function checkCancelled() {
+  if (cancelRequested) throw new Error("已停止巡检，本次未完成的扫描结果不会保存。");
+}
+
+// oneClickRunning tells us whether the caller is a standalone module scan or
+// a step inside "一键巡检". A step must not reset/hide the shared cancel
+// flag and stop button on its own way out -- scanAllButton owns those for
+// the whole run and does so in its own finally block.
+function beginScanning() {
+  if (!oneClickRunning) cancelRequested = false;
+  stopScanButton.hidden = false;
+  stopScanButton.disabled = false;
+}
+
+function endScanning() {
+  if (oneClickRunning) return;
+  cancelRequested = false;
+  stopScanButton.hidden = true;
+  stopScanButton.disabled = true;
+}
+
+stopScanButton.addEventListener("click", () => {
+  cancelRequested = true;
+  stopScanButton.disabled = true;
+  setStatus("正在停止巡检...");
+});
 
 function todayKey() {
   return new Date().toISOString().slice(0, 10);
@@ -458,22 +487,6 @@ function render(snapshots) {
     Number(row.costAudit || 0) > 0
   );
   const displayedPricingRows = summaryView === "todo" ? todoPricingRows : allPricingRows;
-  const totals = [];
-  if (matrixSnapshot) {
-    totals.push(summaryView === "todo"
-      ? `Catalogue 待办 Merchant：${todoMatrixRows.length} / ${allMatrixRows.length} 个`
-      : `Catalogue Merchant：${allMatrixRows.length} 个`);
-  }
-  if (pricingMatrixSnapshot) {
-    totals.push(summaryView === "todo"
-      ? `Pricing 待办 Merchant：${todoPricingRows.length} / ${allPricingRows.length} 个`
-      : `Pricing Merchant：${allPricingRows.length} 个`);
-  }
-  if (orderMatrixSnapshot) {
-    totals.push(summaryView === "todo"
-      ? `Order 待办 Merchant：${todoOrderRows.length} / ${allOrderRows.length} 个`
-      : `Order Merchant：${allOrderRows.length} 个`);
-  }
   const matrixLines = formatMerchantMatrix(buildMerchantTodoMatrix(snapshots));
   const hasMatrix = !!matrixSnapshot || !!orderMatrixSnapshot || !!pricingMatrixSnapshot;
   const matrixSections = [
@@ -499,7 +512,6 @@ function render(snapshots) {
   summaryBox.innerHTML = `
     <div class="card">
       <div class="card-title"><span>${todayKey()} 汇总</span><span>${snapshots.length} 项</span></div>
-      ${totals.map(line => `<div class="line">${escapeHtml(line)}</div>`).join("")}
       ${hasMatrix ? `
         <div class="summary-filter" role="group" aria-label="汇总数据筛选">
           <button type="button" data-summary-view="todo" class="${summaryView === "todo" ? "active" : ""}" aria-pressed="${summaryView === "todo"}">待办数据</button>
@@ -576,6 +588,7 @@ async function waitForEhDataReady(tabId, label) {
   let lastReadiness = null;
   let stableHits = 0;
   for (let attempt = 1; attempt <= 30; attempt += 1) {
+    checkCancelled();
     const response = await askContent(tabId, { type: "EH_ASSISTANT_READY" });
     const readiness = response?.readiness;
     if (readiness) {
@@ -742,6 +755,7 @@ scanAllButton.addEventListener("click", async () => {
     return;
   }
 
+  beginScanning();
   oneClickRunning = true;
   scanAllButton.disabled = true;
   const jobs = [
@@ -767,6 +781,7 @@ scanAllButton.addEventListener("click", async () => {
 
   try {
     for (let index = 0; index < jobs.length; index += 1) {
+      checkCancelled();
       const job = jobs[index];
       setStatus(`一键巡检 ${index + 1}/${jobs.length}：正在准备 ${job.label}...`);
       await openEhPage(tab.id, job.url, job.label);
@@ -782,6 +797,7 @@ scanAllButton.addEventListener("click", async () => {
     autoScanCatalogueButton.disabled = false;
     autoScanPricingButton.disabled = false;
     autoScanOrdersButton.disabled = false;
+    endScanning();
   }
 });
 
@@ -792,6 +808,7 @@ autoScanCatalogueButton.addEventListener("click", async () => {
     return;
   }
 
+  beginScanning();
   autoScanCatalogueButton.disabled = true;
   autoScanOrdersButton.disabled = true;
   autoScanPricingButton.disabled = true;
@@ -825,6 +842,7 @@ autoScanCatalogueButton.addEventListener("click", async () => {
 
     const rows = [];
     for (let merchantIndex = 0; merchantIndex < merchants.length; merchantIndex += 1) {
+      checkCancelled();
       const merchant = merchants[merchantIndex];
       setStatus(`正在选择 Merchant ${merchantIndex + 1}/${merchants.length}: ${merchant}`);
       let selected = false;
@@ -881,6 +899,7 @@ autoScanCatalogueButton.addEventListener("click", async () => {
     autoScanOrdersButton.disabled = false;
     autoScanPricingButton.disabled = false;
     if (!oneClickRunning) scanAllButton.disabled = false;
+    endScanning();
   }
 });
 
@@ -891,6 +910,7 @@ autoScanOrdersButton.addEventListener("click", async () => {
     return;
   }
 
+  beginScanning();
   autoScanOrdersButton.disabled = true;
   autoScanCatalogueButton.disabled = true;
   autoScanPricingButton.disabled = true;
@@ -919,6 +939,7 @@ autoScanOrdersButton.addEventListener("click", async () => {
 
     const rows = [];
     for (let merchantIndex = 0; merchantIndex < merchants.length; merchantIndex += 1) {
+      checkCancelled();
       const merchant = merchants[merchantIndex];
       setStatus(`Order ${merchantIndex + 1}/${merchants.length}：正在选择 ${merchant}`);
       let selected = false;
@@ -971,6 +992,7 @@ autoScanOrdersButton.addEventListener("click", async () => {
     autoScanCatalogueButton.disabled = false;
     autoScanPricingButton.disabled = false;
     if (!oneClickRunning) scanAllButton.disabled = false;
+    endScanning();
   }
 });
 
@@ -981,6 +1003,7 @@ autoScanPricingButton.addEventListener("click", async () => {
     return;
   }
 
+  beginScanning();
   autoScanPricingButton.disabled = true;
   autoScanCatalogueButton.disabled = true;
   autoScanOrdersButton.disabled = true;
@@ -997,6 +1020,7 @@ autoScanPricingButton.addEventListener("click", async () => {
     const merchantOrder = [];
 
     for (let pageIndex = 0; pageIndex < pageConfigs.length; pageIndex += 1) {
+      checkCancelled();
       const pageConfig = pageConfigs[pageIndex];
       setStatus(`Pricing ${pageIndex + 1}/${pageConfigs.length}：正在返回 Pricing 并打开 ${pageConfig.label}...`);
       await openEhPage(tab.id, pricingUrl, "Pricing");
@@ -1027,6 +1051,7 @@ autoScanPricingButton.addEventListener("click", async () => {
       }
 
       for (let merchantIndex = 0; merchantIndex < merchants.length; merchantIndex += 1) {
+        checkCancelled();
         const merchant = merchants[merchantIndex];
         if (!rowMap.has(merchant)) {
           rowMap.set(merchant, { merchant, toBeUpdated: 0, pricingFailedUpdate: 0, costAudit: 0 });
@@ -1070,6 +1095,7 @@ autoScanPricingButton.addEventListener("click", async () => {
     autoScanCatalogueButton.disabled = false;
     autoScanOrdersButton.disabled = false;
     if (!oneClickRunning) scanAllButton.disabled = false;
+    endScanning();
   }
 });
 
@@ -1085,7 +1111,7 @@ auditProductButton.addEventListener("click", async () => {
   setAuditStatus("正在读取当前商品信息并检查 Media 图片...");
   try {
     const response = await askContentWithInjection(tab.id, { type: "EH_ASSISTANT_AUDIT_PRODUCT" });
-    if (!response) throw new Error("无法连接当前 EH 页面脚本，请确认扩展已更新到 v0.14.0 后重试。");
+    if (!response) throw new Error("无法连接当前 EH 页面脚本，请确认扩展已更新到 v0.15.0 后重试。");
     if (!response.ok) throw new Error(`审核执行失败：${response.stage || "未知步骤"}；${response.error || "未知错误"}`);
     if (!response.result) throw new Error("页面脚本已连接，但当前网址不是运营端 Catalogue 商品详情路径。");
     const auditResult = await resolveMediaByScreenshot(tab, response.result);

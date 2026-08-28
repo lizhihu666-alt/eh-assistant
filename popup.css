@@ -208,8 +208,12 @@ p {
 
 .utility-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  grid-template-columns: 1fr;
   gap: 6px;
+}
+
+.stop-scan {
+  width: 100%;
 }
 
 .audit-heading {
@@ -336,6 +340,31 @@ p {
 
 .summary-section {
   margin-top: 18px;
+}
+
+.summary-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.summary-section-head h2 {
+  margin: 0;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: #66758a;
+}
+
+.icon-button:hover {
+  color: #245fd5;
 }
 
 h2 {
