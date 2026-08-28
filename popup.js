@@ -227,13 +227,6 @@ async function saveSnapshot(snapshot) {
   return filtered;
 }
 
-function addCounts(target, source) {
-  Object.entries(source || {}).forEach(([key, value]) => {
-    target[key] = (target[key] || 0) + value;
-  });
-  return target;
-}
-
 function buildMerchantTodoMatrix(snapshots) {
   const matrix = {};
   snapshots.forEach(snapshot => {
@@ -701,37 +694,6 @@ async function waitForPath(tabId, pathname) {
     await delay(250);
   }
   return false;
-}
-
-async function readMerchantCounts(tabId) {
-  const response = await askContent(tabId, { type: "EH_ASSISTANT_MERCHANT_COUNTS" });
-  return response?.result || null;
-}
-
-function catalogueScanUrl(currentUrl, tabValue, page) {
-  const url = new URL(currentUrl);
-  url.searchParams.set("tab", tabValue);
-  url.searchParams.set("page", String(page));
-  url.searchParams.set("page_size", "100");
-  return url.toString();
-}
-
-function createMerchantSnapshot(baseSnapshot, tabConfig, merchantResult) {
-  const fallbackCounts = baseSnapshot?.merchantCounts || {};
-  const merchantFilterCounts = merchantResult?.counts || {};
-  return {
-    ...baseSnapshot,
-    key: "admin_catalogue_auto",
-    label: `运营端 Catalogue - ${tabConfig.label}`,
-    tab: tabConfig.value,
-    todoType: tabConfig.label,
-    url: baseSnapshot?.url || "",
-    scannedAt: new Date().toISOString(),
-    totalItems: null,
-    merchantFilterSource: merchantResult?.source || "fallback_table",
-    merchantFilterCounts,
-    merchantCounts: Object.keys(merchantFilterCounts).length ? merchantFilterCounts : fallbackCounts
-  };
 }
 
 async function countCurrentMerchantTabRows(tabId, label) {

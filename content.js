@@ -197,27 +197,6 @@
     return null;
   }
 
-  function visibleOverlayTexts() {
-    const overlays = [
-      ...document.querySelectorAll(".ant-dropdown:not(.ant-dropdown-hidden), .ant-popover:not(.ant-popover-hidden), .ant-select-dropdown:not(.ant-select-dropdown-hidden), [role='listbox']")
-    ].filter(isVisible);
-    const roots = overlays.length ? overlays : [document.body];
-    const seen = new Set();
-    const values = [];
-    roots.forEach(root => {
-      [...root.querySelectorAll("label,li,div,span,[role='option'],[role='menuitem'],.ant-checkbox-wrapper")]
-        .filter(isVisible)
-        .forEach(element => {
-          const text = clean(element.textContent);
-          if (text && !seen.has(text)) {
-            seen.add(text);
-            values.push(text);
-          }
-        });
-    });
-    return values;
-  }
-
   function visibleOverlayRoots() {
     const overlays = [
       ...document.querySelectorAll(".ant-dropdown:not(.ant-dropdown-hidden), .ant-popover:not(.ant-popover-hidden), .ant-select-dropdown:not(.ant-select-dropdown-hidden), [role='listbox']")
@@ -424,26 +403,6 @@
       });
     if (!next) return false;
     return clickElement(next.querySelector("button,a") || next);
-  }
-
-  async function extractMerchantFilterCounts() {
-    const trigger = findMerchantTrigger();
-    if (!trigger) return { source: "merchant_filter_missing", counts: {}, options: [] };
-    trigger.click();
-    await delay(700);
-    const options = visibleOverlayTexts()
-      .map(parseMerchantLine)
-      .filter(Boolean);
-    const counts = {};
-    options.forEach(option => {
-      if (option.count !== null) counts[option.merchant] = option.count;
-    });
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
-    return {
-      source: Object.keys(counts).length ? "merchant_filter" : "merchant_filter_no_counts",
-      counts,
-      options
-    };
   }
 
   function pageLines() {
@@ -972,12 +931,6 @@
         sendResponse({ ok: false, error: error?.message || String(error) });
       }
       return;
-    }
-    if (message?.type === "EH_ASSISTANT_MERCHANT_COUNTS") {
-      extractMerchantFilterCounts()
-        .then(result => sendResponse({ ok: true, result }))
-        .catch(error => sendResponse({ ok: false, error: error?.message || String(error) }));
-      return true;
     }
     if (message?.type === "EH_ASSISTANT_LIST_MERCHANTS") {
       listMerchantOptions()
