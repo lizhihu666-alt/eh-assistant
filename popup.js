@@ -1,5 +1,6 @@
 const scanAllButton = document.getElementById("scanAll");
 const stopScanButton = document.getElementById("stopScan");
+const resumeScanButton = document.getElementById("resumeScan");
 const autoScanCatalogueButton = document.getElementById("autoScanCatalogue");
 const autoScanOrdersButton = document.getElementById("autoScanOrders");
 const autoScanPricingButton = document.getElementById("autoScanPricing");
@@ -28,7 +29,7 @@ const sortState = {};
 versionLabel.textContent = `v${chrome.runtime.getManifest().version}`;
 
 function checkCancelled() {
-  if (cancelRequested) throw new Error("已停止巡检，本次未完成的扫描结果不会保存。");
+  if (cancelRequested) throw new Error("已停止巡检，进度已保存，可点击「继续巡检」从断点继续。");
 }
 
 // oneClickRunning tells us whether the caller is a standalone module scan or
@@ -39,6 +40,7 @@ function beginScanning() {
   if (!oneClickRunning) cancelRequested = false;
   stopScanButton.hidden = false;
   stopScanButton.disabled = false;
+  resumeScanButton.hidden = true;
 }
 
 function endScanning() {
@@ -52,6 +54,55 @@ stopScanButton.addEventListener("click", () => {
   cancelRequested = true;
   stopScanButton.disabled = true;
   setStatus("正在停止巡检...");
+});
+
+// Resume support: after every Merchant a module scan completes, its progress
+// (already-processed Merchants + accumulated rows) is checkpointed to
+// storage under its own key -- separate from the final matrix snapshot, which
+// is only written once a run finishes completely. This lets a scan
+// interrupted partway (Stop button, a thrown error, closing the panel) pick
+// back up from the same Merchant instead of restarting the whole module.
+const MODULE_LABELS = { catalogue: "Catalogue", pricing: "Pricing", order: "Order" };
+
+function progressStorageKey(module) {
+  return `ehAssistant:progress:${module}`;
+}
+
+async function loadScanProgress(module) {
+  const key = progressStorageKey(module);
+  const result = await chrome.storage.local.get(key);
+  return result[key] || null;
+}
+
+async function saveScanProgress(module, progress) {
+  await chrome.storage.local.set({ [progressStorageKey(module)]: progress });
+}
+
+async function clearScanProgress(module) {
+  await chrome.storage.local.remove(progressStorageKey(module));
+}
+
+async function refreshResumeAvailability() {
+  for (const module of Object.keys(MODULE_LABELS)) {
+    const progress = await loadScanProgress(module);
+    if (progress) {
+      resumeScanButton.hidden = false;
+      resumeScanButton.disabled = false;
+      resumeScanButton.dataset.module = module;
+      const pageSuffix = progress.pageLabel ? ` / ${progress.pageLabel}` : "";
+      resumeScanButton.textContent = `继续巡检（${MODULE_LABELS[module]}${pageSuffix} ${progress.nextMerchantIndex}/${progress.merchants.length}）`;
+      return;
+    }
+  }
+  resumeScanButton.hidden = true;
+  delete resumeScanButton.dataset.module;
+}
+
+resumeScanButton.addEventListener("click", () => {
+  const module = resumeScanButton.dataset.module;
+  if (module === "catalogue") runCatalogueScan({ resume: true });
+  else if (module === "order") runOrderScan({ resume: true });
+  else if (module === "pricing") runPricingScan({ resume: true });
 });
 
 function todayKey() {
@@ -909,7 +960,7 @@ scanAllButton.addEventListener("click", async () => {
   }
 });
 
-autoScanCatalogueButton.addEventListener("click", async () => {
+async function runCatalogueScan({ resume } = {}) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id || !/https:\/\/admin\.engagehub\.tsostech\.com\/catalogue/.test(tab.url || "")) {
     setStatus("请先打开运营端 Catalogue 页面。");
@@ -927,29 +978,42 @@ autoScanCatalogueButton.addEventListener("click", async () => {
     { value: "SYNC_FAILURE", label: "Sync Failure" }
   ];
 
+  const existingProgress = resume ? await loadScanProgress("catalogue") : null;
   const combinedSnapshots = [];
   try {
     // Reloading guarantees the active EH tab receives the same content-script
     // version as this popup after the unpacked extension has been refreshed.
-    setStatus("正在准备 EH 页面...");
+    setStatus(existingProgress ? "正在恢复 Catalogue 巡检..." : "正在准备 EH 页面...");
     await chrome.tabs.reload(tab.id);
     await waitForTabComplete(tab.id);
     await waitForEhDataReady(tab.id, "Catalogue");
 
-    // Opening Merchant only reads its selectable names. No count is ever read
-    // from All; each merchant is counted only after New Products is selected.
-    setStatus("正在打开 Merchant 列表...");
-    let merchants = await listMerchants(tab.id);
-    merchants = [...new Set(merchants)].filter(Boolean);
-    if (!merchants.length) {
-      setStatus("没有读取到 Merchant 列表，请确认 Merchant 筛选可打开。");
-      return;
+    let merchants;
+    let rows;
+    let startIndex;
+    if (existingProgress) {
+      merchants = existingProgress.merchants;
+      rows = existingProgress.rows;
+      startIndex = existingProgress.nextMerchantIndex;
+      setStatus(`已恢复进度：${startIndex}/${merchants.length} 个 Merchant，继续扫描...`);
+    } else {
+      await clearScanProgress("catalogue");
+      // Opening Merchant only reads its selectable names. No count is ever read
+      // from All; each merchant is counted only after New Products is selected.
+      setStatus("正在打开 Merchant 列表...");
+      merchants = await listMerchants(tab.id);
+      merchants = [...new Set(merchants)].filter(Boolean);
+      if (!merchants.length) {
+        setStatus("没有读取到 Merchant 列表，请确认 Merchant 筛选可打开。");
+        return;
+      }
+      setStatus(`已读取 ${merchants.length} 个 Merchant，开始逐个扫描...`);
+      await delay(500);
+      rows = [];
+      startIndex = 0;
     }
-    setStatus(`已读取 ${merchants.length} 个 Merchant，开始逐个扫描...`);
-    await delay(500);
 
-    const rows = [];
-    for (let merchantIndex = 0; merchantIndex < merchants.length; merchantIndex += 1) {
+    for (let merchantIndex = startIndex; merchantIndex < merchants.length; merchantIndex += 1) {
       checkCancelled();
       const merchant = merchants[merchantIndex];
       setStatus(`正在选择 Merchant ${merchantIndex + 1}/${merchants.length}: ${merchant}`);
@@ -983,6 +1047,7 @@ autoScanCatalogueButton.addEventListener("click", async () => {
         if (tabConfig.value === "SYNC_FAILURE") row.syncFailure = count;
       }
       rows.push(row);
+      await saveScanProgress("catalogue", { merchants, nextMerchantIndex: merchantIndex + 1, rows });
     }
 
     combinedSnapshots.push({
@@ -998,6 +1063,7 @@ autoScanCatalogueButton.addEventListener("click", async () => {
     const withoutOldCatalogue = existing.filter(item => item.key !== "admin_catalogue_auto" && item.key !== "admin_catalogue_merchant_matrix");
     const next = [...withoutOldCatalogue, ...combinedSnapshots];
     await chrome.storage.local.set({ [key]: next });
+    await clearScanProgress("catalogue");
     setStatus(`自动扫描完成：${rows.length} 个 merchant。`);
     render(next);
   } catch (error) {
@@ -1008,10 +1074,13 @@ autoScanCatalogueButton.addEventListener("click", async () => {
     autoScanPricingButton.disabled = false;
     if (!oneClickRunning) scanAllButton.disabled = false;
     endScanning();
+    await refreshResumeAvailability();
   }
-});
+}
 
-autoScanOrdersButton.addEventListener("click", async () => {
+autoScanCatalogueButton.addEventListener("click", () => runCatalogueScan());
+
+async function runOrderScan({ resume } = {}) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id || !/https:\/\/admin\.engagehub\.tsostech\.com\/order-list/.test(tab.url || "")) {
     setStatus("请先打开运营端 Order List 页面。");
@@ -1029,24 +1098,37 @@ autoScanOrdersButton.addEventListener("click", async () => {
     { field: "canceled", label: "Canceled" }
   ];
 
+  const existingProgress = resume ? await loadScanProgress("order") : null;
   try {
-    setStatus("正在准备 Order List 页面...");
+    setStatus(existingProgress ? "正在恢复 Order 巡检..." : "正在准备 Order List 页面...");
     await chrome.tabs.reload(tab.id);
     await waitForTabComplete(tab.id);
     await waitForEhDataReady(tab.id, "Order List");
 
-    setStatus("正在打开 Order Merchant 列表...");
-    let merchants = await listMerchants(tab.id);
-    merchants = [...new Set(merchants)].filter(Boolean);
-    if (!merchants.length) {
-      setStatus("没有读取到 Order Merchant 列表，请确认 Merchant 筛选可打开。");
-      return;
+    let merchants;
+    let rows;
+    let startIndex;
+    if (existingProgress) {
+      merchants = existingProgress.merchants;
+      rows = existingProgress.rows;
+      startIndex = existingProgress.nextMerchantIndex;
+      setStatus(`已恢复进度：${startIndex}/${merchants.length} 个 Order Merchant，继续扫描...`);
+    } else {
+      await clearScanProgress("order");
+      setStatus("正在打开 Order Merchant 列表...");
+      merchants = await listMerchants(tab.id);
+      merchants = [...new Set(merchants)].filter(Boolean);
+      if (!merchants.length) {
+        setStatus("没有读取到 Order Merchant 列表，请确认 Merchant 筛选可打开。");
+        return;
+      }
+      setStatus(`已读取 ${merchants.length} 个 Order Merchant，开始逐个扫描...`);
+      await delay(500);
+      rows = [];
+      startIndex = 0;
     }
-    setStatus(`已读取 ${merchants.length} 个 Order Merchant，开始逐个扫描...`);
-    await delay(500);
 
-    const rows = [];
-    for (let merchantIndex = 0; merchantIndex < merchants.length; merchantIndex += 1) {
+    for (let merchantIndex = startIndex; merchantIndex < merchants.length; merchantIndex += 1) {
       checkCancelled();
       const merchant = merchants[merchantIndex];
       setStatus(`Order ${merchantIndex + 1}/${merchants.length}：正在选择 ${merchant}`);
@@ -1077,6 +1159,7 @@ autoScanOrdersButton.addEventListener("click", async () => {
         row[tabConfig.field] = count;
       }
       rows.push(row);
+      await saveScanProgress("order", { merchants, nextMerchantIndex: merchantIndex + 1, rows });
     }
 
     const orderSnapshot = {
@@ -1091,6 +1174,7 @@ autoScanOrdersButton.addEventListener("click", async () => {
     const withoutOldOrders = existing.filter(item => item.key !== "admin_order_merchant_matrix");
     const next = [...withoutOldOrders, orderSnapshot];
     await chrome.storage.local.set({ [key]: next });
+    await clearScanProgress("order");
     setStatus(`Order 自动扫描完成：${rows.length} 个 Merchant。`);
     render(next);
   } catch (error) {
@@ -1101,10 +1185,13 @@ autoScanOrdersButton.addEventListener("click", async () => {
     autoScanPricingButton.disabled = false;
     if (!oneClickRunning) scanAllButton.disabled = false;
     endScanning();
+    await refreshResumeAvailability();
   }
-});
+}
 
-autoScanPricingButton.addEventListener("click", async () => {
+autoScanOrdersButton.addEventListener("click", () => runOrderScan());
+
+async function runPricingScan({ resume } = {}) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id || !/https:\/\/admin\.engagehub\.tsostech\.com\/pricing(?:\/|$)/.test(tab.url || "")) {
     setStatus("请先打开运营端 Pricing 页面。");
@@ -1123,14 +1210,29 @@ autoScanPricingButton.addEventListener("click", async () => {
     { field: "costAudit", label: "Cost Audit", pathname: "/pricing/cost-audit", navigates: true }
   ];
 
+  const existingProgress = resume ? await loadScanProgress("pricing") : null;
   try {
-    const rowMap = new Map();
-    const merchantOrder = [];
+    let rowMap;
+    let merchantOrder;
+    let startPageIndex;
+    if (existingProgress) {
+      rowMap = new Map(Object.entries(existingProgress.rowMap));
+      merchantOrder = existingProgress.merchantOrder;
+      startPageIndex = existingProgress.pageIndex;
+    } else {
+      await clearScanProgress("pricing");
+      rowMap = new Map();
+      merchantOrder = [];
+      startPageIndex = 0;
+    }
 
-    for (let pageIndex = 0; pageIndex < pageConfigs.length; pageIndex += 1) {
+    for (let pageIndex = startPageIndex; pageIndex < pageConfigs.length; pageIndex += 1) {
       checkCancelled();
       const pageConfig = pageConfigs[pageIndex];
-      setStatus(`Pricing ${pageIndex + 1}/${pageConfigs.length}：正在返回 Pricing 并打开 ${pageConfig.label}...`);
+      // Only the page we resumed on (if any) reuses a saved Merchant list and
+      // start offset; every later page in this run always lists fresh.
+      const resumingThisPage = existingProgress && pageIndex === startPageIndex;
+      setStatus(`Pricing ${pageIndex + 1}/${pageConfigs.length}：${resumingThisPage ? "正在恢复" : "正在返回 Pricing 并打开"} ${pageConfig.label}...`);
       await openEhPage(tab.id, pricingUrl, "Pricing");
 
       const navigation = pageConfig.navigates ? waitForTabComplete(tab.id) : null;
@@ -1151,14 +1253,23 @@ autoScanPricingButton.addEventListener("click", async () => {
       }
       await waitForEhDataReady(tab.id, `Pricing / ${pageConfig.label}`);
 
-      setStatus(`正在读取 ${pageConfig.label} 的 Merchant 列表...`);
-      let merchants = await listMerchants(tab.id);
-      merchants = [...new Set(merchants)].filter(Boolean);
-      if (!merchants.length) {
-        throw new Error(`${pageConfig.label} 没有读取到 Merchant 列表，扫描已停止。`);
+      let merchants;
+      let merchantStartIndex;
+      if (resumingThisPage) {
+        merchants = existingProgress.merchants;
+        merchantStartIndex = existingProgress.nextMerchantIndex;
+        setStatus(`已恢复进度：Pricing / ${pageConfig.label} ${merchantStartIndex}/${merchants.length}，继续扫描...`);
+      } else {
+        setStatus(`正在读取 ${pageConfig.label} 的 Merchant 列表...`);
+        merchants = await listMerchants(tab.id);
+        merchants = [...new Set(merchants)].filter(Boolean);
+        if (!merchants.length) {
+          throw new Error(`${pageConfig.label} 没有读取到 Merchant 列表，扫描已停止。`);
+        }
+        merchantStartIndex = 0;
       }
 
-      for (let merchantIndex = 0; merchantIndex < merchants.length; merchantIndex += 1) {
+      for (let merchantIndex = merchantStartIndex; merchantIndex < merchants.length; merchantIndex += 1) {
         checkCancelled();
         const merchant = merchants[merchantIndex];
         if (!rowMap.has(merchant)) {
@@ -1178,6 +1289,14 @@ autoScanPricingButton.addEventListener("click", async () => {
           tab.id,
           `Pricing / ${pageConfig.label} / ${merchant}`
         );
+        await saveScanProgress("pricing", {
+          pageIndex,
+          pageLabel: pageConfig.label,
+          merchants,
+          nextMerchantIndex: merchantIndex + 1,
+          rowMap: Object.fromEntries(rowMap),
+          merchantOrder
+        });
       }
     }
 
@@ -1194,6 +1313,7 @@ autoScanPricingButton.addEventListener("click", async () => {
     const withoutOldPricing = existing.filter(item => item.key !== "admin_pricing_merchant_matrix");
     const next = [...withoutOldPricing, pricingSnapshot];
     await chrome.storage.local.set({ [key]: next });
+    await clearScanProgress("pricing");
     setStatus(`Pricing 自动扫描完成：${rows.length} 个 Merchant。`);
     render(next);
   } catch (error) {
@@ -1204,8 +1324,11 @@ autoScanPricingButton.addEventListener("click", async () => {
     autoScanOrdersButton.disabled = false;
     if (!oneClickRunning) scanAllButton.disabled = false;
     endScanning();
+    await refreshResumeAvailability();
   }
-});
+}
+
+autoScanPricingButton.addEventListener("click", () => runPricingScan());
 
 auditProductButton.addEventListener("click", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -1242,8 +1365,10 @@ copyButton.addEventListener("click", async () => {
 
 clearButton.addEventListener("click", async () => {
   await chrome.storage.local.remove(storageKey());
+  await Promise.all(Object.keys(MODULE_LABELS).map(module => clearScanProgress(module)));
   setStatus("今日记录已清空。");
   await refresh();
+  await refreshResumeAvailability();
 });
 
 exportCsvButton.addEventListener("click", async () => {
@@ -1265,4 +1390,5 @@ merchantSearchInput.addEventListener("input", () => {
 
 setWorkspace(localStorage.getItem("ehAssistantWorkspace") || "todo");
 loadYesterdaySnapshots();
+refreshResumeAvailability();
 refresh();
