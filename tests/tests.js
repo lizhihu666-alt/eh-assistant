@@ -163,6 +163,28 @@
     "no_pixels"
   );
 
+  // --- classifySwatchLikelihood (content.js -- Color Swatch Image check) ---
+  assertEqual(
+    "classifySwatchLikelihood: a solid color image is a genuine swatch",
+    I.classifySwatchLikelihood(solidImage(40, 40, 0x2a, 0x6f, 0xed, 255), 40, 40).code,
+    "swatch"
+  );
+  assertEqual(
+    "classifySwatchLikelihood: a busy checkerboard reads as a product photo, not a swatch",
+    I.classifySwatchLikelihood(checkerImage(40, 40), 40, 40).code,
+    "product_photo"
+  );
+  assertEqual(
+    "classifySwatchLikelihood: a fully transparent image needs manual review",
+    I.classifySwatchLikelihood(solidImage(40, 40, 0x2a, 0x6f, 0xed, 0), 40, 40).code,
+    "transparent"
+  );
+  assertEqual(
+    "classifySwatchLikelihood: an empty pixel buffer reports pixel_unavailable",
+    I.classifySwatchLikelihood(new Uint8ClampedArray(0), 0, 0).code,
+    "pixel_unavailable"
+  );
+
   const passCount = results.filter(result => result.pass).length;
   const failCount = results.length - passCount;
   const lines = results.map(result => `${result.pass ? "PASS" : "FAIL"}  ${result.name}${result.detail ? `\n      ${result.detail}` : ""}`);

@@ -8,7 +8,7 @@
 
 `C:\Users\leohu\Documents\Codex\eh-assistant-mvp`
 
-当前版本：`v0.17.0`
+当前版本：`v0.18.0`
 
 版本号只需要维护 `manifest.json` 一处：`popup.html`/`popup.js` 会在加载时通过 `chrome.runtime.getManifest().version` 动态读取并显示，不再在多个文件里手写版本号字符串。
 
@@ -70,15 +70,21 @@
 - 检查同一 SPU 的 `VIP Price`、`MSRP`、`Token`、`Cost`、`SRP` 是否一致。
 - `Token` 为空值时视为一致；只有非空 Token 值彼此不同时才提示。
 
-图片审核规则：
+图片审核规则（`Media` 列）：
 
-- 只检查 `Media` 列，`Color Swatch Image` 不参与。
 - 模特图和纯背景商品图需要检查背景是否接近 `#E8E8E8`。
 - 场景图、尺码表及其他信息图豁免背景色检查。
 - 当前算法使用角落背景聚类与边缘占比，避免人物触及图片边缘时被误判为场景图。
 - 已使用一组真实 EH 图片验证：前 6 张模特图均正确进入背景检查并读取为 `#E8E8E8`，最后 1 张尺码表正确识别为信息图并豁免。
 - 支持读取 `img.engagehub.tsostech.com` 和 `cdn.shopify.com` 图片。
 - 图片由扩展后台读取后在本地分析，避免网页跨域限制；其他来源才尝试页面截图备用方案。
+
+Color Swatch 图片审核规则（`Color Swatch Image` 列，独立于 `Media` 列检查）：
+
+- 每个色号的 Color Swatch Image 图片链接不能为空；为空直接提示需关注。
+- 应为纯色块图，不应是产品实拍图：算法对整张图（不只是边缘/角落）做像素采样，计算与图片主色的一致占比——占比 ≥90% 判定为色块图（通过），<60% 判定为疑似产品图（需关注），中间地带判定为无法确定（需人工查看）。这跟 `Media` 列背景色检查（`shared/background-classifier.js`）是两套不同的算法：`Media` 只看边缘背景，允许中间有主体；Color Swatch 要求整张图基本是单一颜色。
+- 只做「是否像色块图」的判断，不校验色块颜色是否与色号名称/实际商品颜色相符。
+- 图片加载方式、跨域处理与 `Media` 列一致；但目前没有接入 `popup.js` 的页面截图兜底方案（Color Swatch 图片通常很小，直接读取失败时会归为「需人工查看」而不是尝试截图）。
 
 ## 当前 UI 状态
 
@@ -99,7 +105,7 @@
 - `content.js`：EH 页面识别、Merchant 遍历、tab 切换、数量读取、商品内容审核和图片分类；文件末尾有一个仅供 `tests/tests.html` 使用的测试导出钩子（`window.__EH_ASSISTANT_TEST__` 为 true 时才会挂载 `window.__ehAssistantInternal`），真实 EH 页面上不会触发。
 - `background.js`：Side Panel 配置及受限图片域名的后台读取。
 - `shared/background-classifier.js`：`content.js` 和 `popup.js` 共用的图片背景色判定核心算法。
-- `tests/tests.html` + `tests/tests.js`：纯函数单元测试（标题/描述检查、价格一致性判断依赖 DOM 未纳入、背景色分类）。这台开发机没有装 Node，所以测试不走 `npm test`，而是直接在 Chrome 里打开 `tests/tests.html` 运行，结果显示在页面上。修改 `content.js` 或 `shared/background-classifier.js` 里的纯函数逻辑后，应该重新打开这个文件确认仍然全部 PASS。
+- `tests/tests.html` + `tests/tests.js`：纯函数单元测试（标题/描述检查、价格一致性判断依赖 DOM 未纳入、`Media` 背景色分类、Color Swatch 色块图判断）。这台开发机没有装 Node，所以测试不走 `npm test`，而是直接在 Chrome 里打开 `tests/tests.html` 运行，结果显示在页面上。修改 `content.js` 或 `shared/background-classifier.js` 里的纯函数逻辑后，应该重新打开这个文件确认仍然全部 PASS。
 - `README.md`：功能与安装说明。
 
 ## 图片与网站权限

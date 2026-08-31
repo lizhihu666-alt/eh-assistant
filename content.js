@@ -729,6 +729,41 @@
     return candidates.slice(0, 200);
   }
 
+  // Color Swatch Image cells render much smaller than Media images, so this
+  // uses a lower minimum-size cutoff than mediaColumnCandidates(). Rows with
+  // no image at all are still returned (candidate: null) so the empty-link
+  // check can report on them.
+  function colorSwatchColumnStatus() {
+    const tables = [...document.querySelectorAll("table")];
+    const mediaTable = tables.find(table => {
+      const headers = [...table.querySelectorAll("thead th")].map(header => clean(header.textContent));
+      return headers.includes("Color Swatch Image") && headers.includes("Media");
+    });
+    if (!mediaTable) return { found: false, rows: [] };
+    const headers = [...mediaTable.querySelectorAll("thead th")].map(header => clean(header.textContent));
+    const swatchIndex = headers.indexOf("Color Swatch Image");
+    if (swatchIndex < 0) return { found: false, rows: [] };
+    const rows = [];
+    [...mediaTable.querySelectorAll("tbody tr")].forEach(row => {
+      const cells = [...row.querySelectorAll(":scope > td")];
+      const swatchCell = cells[swatchIndex];
+      if (!swatchCell) return;
+      const color = clean(cells[0]?.textContent) || "未知色号";
+      const elements = [swatchCell, ...swatchCell.querySelectorAll("img,div,span")];
+      let candidate = null;
+      for (const element of elements) {
+        const url = candidateImageUrl(element);
+        if (!url) continue;
+        const rect = element.getBoundingClientRect();
+        if (element.tagName === "IMG" && (rect.width < 8 || rect.height < 8)) continue;
+        candidate = { element, url, color, rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } };
+        break;
+      }
+      rows.push({ color, candidate });
+    });
+    return { found: true, rows: rows.slice(0, 200) };
+  }
+
   async function loadCandidateImage(candidate) {
     const element = candidate.element;
     const renderedUrl = element.tagName === "IMG" ? (element.currentSrc || element.getAttribute("src") || "") : "";
@@ -873,6 +908,95 @@
     };
   }
 
+  // A genuine color swatch is close to one flat color edge-to-edge. A product
+  // photo -- even one shot on a plain background -- has the product itself
+  // occupying real frame area, so the single-color coverage across the WHOLE
+  // image (not just the border, unlike the Media background check) comes out
+  // much lower. Sampling the full frame is what tells the two apart.
+  function classifySwatchLikelihood(pixels, width, height) {
+    const allSamples = [];
+    const step = Math.max(1, Math.floor(Math.sqrt((width * height) / 900)));
+    for (let y = 0; y < height; y += step) {
+      for (let x = 0; x < width; x += step) {
+        const index = (y * width + x) * 4;
+        allSamples.push([pixels[index], pixels[index + 1], pixels[index + 2], pixels[index + 3]]);
+      }
+    }
+    if (!allSamples.length) return { status: "manual", code: "pixel_unavailable", detail: "图片区域没有可分析像素" };
+    const opaqueSamples = allSamples.filter(pixel => pixel[3] > 220).map(pixel => [pixel[0], pixel[1], pixel[2]]);
+    if (opaqueSamples.length < allSamples.length * 0.5) {
+      return { status: "manual", code: "transparent", detail: "图片含大面积透明区域，需人工确认是否为色块图" };
+    }
+    const mean = [0, 1, 2].map(channel => opaqueSamples.reduce((sum, pixel) => sum + pixel[channel], 0) / opaqueSamples.length);
+    const colorDistance = (first, second) => Math.hypot(first[0] - second[0], first[1] - second[1], first[2] - second[2]);
+    const closeRatio = opaqueSamples.filter(pixel => colorDistance(pixel, mean) <= 26).length / opaqueSamples.length;
+    const color = `#${mean.map(value => Math.round(value).toString(16).padStart(2, "0")).join("").toUpperCase()}`;
+    if (closeRatio >= 0.9) return { status: "pass", code: "swatch", detail: `识别为色块图，颜色约为 ${color}` };
+    if (closeRatio < 0.6) return { status: "attention", code: "product_photo", detail: `疑似产品图而非色块图，画面颜色变化较大（颜色一致占比 ${Math.round(closeRatio * 100)}%）` };
+    return { status: "manual", code: "ambiguous", detail: `无法确定是否为色块图（颜色一致占比 ${Math.round(closeRatio * 100)}%），请人工确认` };
+  }
+
+  async function classifySwatchImageResult(candidate) {
+    try {
+      const image = await loadCandidateImage(candidate);
+      if (!image.complete) await image.decode();
+      const width = image.naturalWidth;
+      const height = image.naturalHeight;
+      if (width < 6 || height < 6) return { status: "manual", code: "too_small", detail: "图片尺寸过小，无法可靠判断" };
+      const canvas = document.createElement("canvas");
+      const scale = Math.min(1, 220 / Math.max(width, height));
+      canvas.width = Math.max(1, Math.round(width * scale));
+      canvas.height = Math.max(1, Math.round(height * scale));
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      return classifySwatchLikelihood(pixels, canvas.width, canvas.height);
+    } catch (error) {
+      const message = String(error?.message || error || "");
+      if (/tainted|cross-origin|cross origin|insecure|security/i.test(message) || error?.name === "SecurityError") {
+        return { status: "manual", code: "pixel_blocked", detail: "图片可显示，但浏览器跨域安全限制阻止读取像素" };
+      }
+      if (/timeout|decode|load|network/i.test(message)) {
+        return { status: "manual", code: "load_failed", detail: "图片加载或解码失败，无法读取像素" };
+      }
+      return { status: "manual", code: "pixel_unavailable", detail: `无法读取图片像素${message ? `：${message}` : ""}` };
+    }
+  }
+
+  async function colorSwatchCheck() {
+    const status = colorSwatchColumnStatus();
+    if (!status.found) return { status: "manual", detail: "未找到 Color Swatch Image 列，请人工确认。" };
+    if (!status.rows.length) return { status: "manual", detail: "未读取到任何色号行，请确认 Variant 表格已加载。" };
+
+    const missingRows = status.rows.filter(row => !row.candidate);
+    const presentRows = status.rows.filter(row => row.candidate);
+    const results = [];
+    for (const row of presentRows) {
+      results.push({ color: row.color, ...await classifySwatchImageResult(row.candidate) });
+    }
+    const attention = results.filter(item => item.status === "attention");
+    const manual = results.filter(item => item.status === "manual");
+
+    const issues = [];
+    if (missingRows.length) {
+      const sample = missingRows.slice(0, 6).map(row => row.color).join("、");
+      issues.push(`${missingRows.length} 个色号缺少 Color Swatch Image 图片链接：${sample}${missingRows.length > 6 ? "等" : ""}`);
+    }
+    if (attention.length) {
+      const sample = attention.slice(0, 6).map(item => `${item.color}：${item.detail}`).join("；");
+      issues.push(`${attention.length} 个色号疑似为产品图而非色块图。${sample}`);
+    }
+    if (issues.length) {
+      const manualNote = manual.length ? `另有 ${manual.length} 个色号无法自动判断，需人工确认。` : "";
+      return { status: "attention", detail: `${issues.join("；")}。${manualNote}` };
+    }
+    if (manual.length) {
+      const sample = manual.slice(0, 5).map(item => item.color).join("、");
+      return { status: "manual", detail: `${status.rows.length} 个色号中有 ${manual.length} 个无法自动判断是否为色块图，需人工确认。涉及：${sample}${manual.length > 5 ? "等" : ""}。` };
+    }
+    return { status: "pass", detail: `共 ${status.rows.length} 个色号，Color Swatch Image 均存在且识别为色块图。` };
+  }
+
   async function auditCurrentProduct(onStage = () => {}) {
     onStage("识别商品详情页");
     const bodyText = clean(document.body.innerText);
@@ -902,6 +1026,8 @@
     checks.push({ label: "价格字段一致性", ...priceConsistencyCheck() });
     onStage("打开并检查 Media 图片");
     checks.push({ label: "图片背景", ...await mediaCheck() });
+    onStage("检查 Color Swatch 图片");
+    checks.push({ label: "Color Swatch", ...await colorSwatchCheck() });
     onStage("生成审核结果");
     return { product, checks, scannedAt: new Date().toISOString() };
   }
@@ -1039,7 +1165,10 @@
       titleChecks,
       languageChecks,
       descriptionChecks,
-      majorContentChecks
+      majorContentChecks,
+      classifySwatchLikelihood,
+      colorSwatchColumnStatus,
+      colorSwatchCheck
     };
   }
 })();
