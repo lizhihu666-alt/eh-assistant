@@ -843,6 +843,7 @@
     const reasonLabels = {
       pixel_blocked: "浏览器跨域安全限制阻止读取像素",
       load_failed: "图片加载或解码失败",
+      broken_image: "图片无法显示，链接可能已失效",
       transparent: "透明背景",
       too_small: "图片尺寸过小",
       pixel_unavailable: "其他像素读取错误",
@@ -942,6 +943,13 @@
       if (!image.complete) await image.decode();
       const width = image.naturalWidth;
       const height = image.naturalHeight;
+      // A broken/expired image link still resolves as "complete" with zero
+      // natural size (that's how the browser renders the broken-image icon)
+      // rather than throwing -- this is a confirmed problem, not something
+      // that merely couldn't be judged, so it must not fall into "too_small".
+      if (!width || !height) {
+        return { status: "attention", code: "broken_image", detail: "图片无法显示，链接可能已失效或返回了空内容" };
+      }
       if (width < 6 || height < 6) return { status: "manual", code: "too_small", detail: "图片尺寸过小，无法可靠判断" };
       const canvas = document.createElement("canvas");
       const scale = Math.min(1, 220 / Math.max(width, height));
@@ -956,8 +964,11 @@
       if (/tainted|cross-origin|cross origin|insecure|security/i.test(message) || error?.name === "SecurityError") {
         return { status: "manual", code: "pixel_blocked", detail: "图片可显示，但浏览器跨域安全限制阻止读取像素" };
       }
-      if (/timeout|decode|load|network/i.test(message)) {
-        return { status: "manual", code: "load_failed", detail: "图片加载或解码失败，无法读取像素" };
+      // decode() rejecting (as opposed to resolving with a 0x0 image) means
+      // the browser couldn't load the resource at all -- also a confirmed
+      // broken link, so this is "attention", not "manual".
+      if (/timeout|decode|load|network/i.test(message) || error?.name === "EncodingError") {
+        return { status: "attention", code: "load_failed", detail: `图片加载失败，链接可能已失效${message ? `：${message}` : ""}` };
       }
       return { status: "manual", code: "pixel_unavailable", detail: `无法读取图片像素${message ? `：${message}` : ""}` };
     }
@@ -984,15 +995,15 @@
     }
     if (attention.length) {
       const sample = attention.slice(0, 6).map(item => `${item.color}：${item.detail}`).join("；");
-      issues.push(`${attention.length} 个色号疑似为产品图而非色块图。${sample}`);
+      issues.push(`${attention.length} 个色号的图片有问题（加载失败或疑似产品图）：${sample}`);
     }
     if (issues.length) {
-      const manualNote = manual.length ? `另有 ${manual.length} 个色号无法自动判断，需人工确认。` : "";
+      const manualNote = manual.length ? `另有 ${manual.length} 个色号无法自动判断，需人工确认（${summarizeManualReasons(manual)}）。` : "";
       return { status: "attention", detail: `${issues.join("；")}。${manualNote}` };
     }
     if (manual.length) {
       const sample = manual.slice(0, 5).map(item => item.color).join("、");
-      return { status: "manual", detail: `${status.rows.length} 个色号中有 ${manual.length} 个无法自动判断是否为色块图，需人工确认。涉及：${sample}${manual.length > 5 ? "等" : ""}。` };
+      return { status: "manual", detail: `${status.rows.length} 个色号中有 ${manual.length} 个无法自动判断是否为色块图，需人工确认。原因：${summarizeManualReasons(manual)}。涉及：${sample}${manual.length > 5 ? "等" : ""}。` };
     }
     return { status: "pass", detail: `共 ${status.rows.length} 个色号，Color Swatch Image 均存在且识别为色块图。` };
   }
