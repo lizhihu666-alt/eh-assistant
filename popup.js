@@ -16,8 +16,8 @@ const workspaceTabs = [...document.querySelectorAll("[data-workspace]")];
 const todoWorkspace = document.getElementById("todoWorkspace");
 const auditWorkspace = document.getElementById("auditWorkspace");
 const versionLabel = document.getElementById("versionLabel");
-const todoBadge = document.getElementById("todoBadge");
 const merchantSearchInput = document.getElementById("merchantSearch");
+const toggleSearchButton = document.getElementById("toggleSearch");
 let summaryView = "todo";
 let oneClickRunning = false;
 let cancelRequested = false;
@@ -137,11 +137,6 @@ function snapshotRows(snapshots, type) {
 
 function moduleTotal(rows, fields) {
   return rows.reduce((sum, row) => sum + fields.reduce((fieldSum, field) => fieldSum + Number(row[field] || 0), 0), 0);
-}
-
-function totalPendingCount(snapshots) {
-  return Object.entries(MODULE_FIELDS)
-    .reduce((sum, [type, fields]) => sum + moduleTotal(snapshotRows(snapshots, type), fields), 0);
 }
 
 function moduleTrendLabel(type, rows) {
@@ -587,9 +582,6 @@ function render(snapshots) {
 }
 
 function renderInner(snapshots) {
-  todoBadge.hidden = !snapshots.length;
-  if (snapshots.length) todoBadge.textContent = String(totalPendingCount(snapshots));
-
   summaryBox.innerHTML = "";
 
   if (!snapshots.length) {
@@ -1386,6 +1378,18 @@ exportCsvButton.addEventListener("click", async () => {
 merchantSearchInput.addEventListener("input", () => {
   searchQuery = merchantSearchInput.value;
   render(currentSnapshots);
+});
+
+toggleSearchButton.addEventListener("click", () => {
+  const willShow = merchantSearchInput.hidden;
+  merchantSearchInput.hidden = !willShow;
+  if (willShow) {
+    merchantSearchInput.focus();
+  } else {
+    merchantSearchInput.value = "";
+    searchQuery = "";
+    render(currentSnapshots);
+  }
 });
 
 setWorkspace(localStorage.getItem("ehAssistantWorkspace") || "todo");

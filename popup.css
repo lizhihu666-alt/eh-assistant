@@ -140,7 +140,7 @@ button:focus-visible {
 }
 
 button:disabled {
-  cursor: wait;
+  cursor: default;
   opacity: 0.55;
 }
 
@@ -193,21 +193,6 @@ p {
   flex: 0 0 auto;
   align-items: center;
   gap: 6px;
-}
-
-.todo-badge {
-  display: inline-flex;
-  min-width: 20px;
-  height: 20px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  background: var(--attention-bg);
-  color: var(--attention-text);
-  font-size: 11px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  padding: 0 6px;
 }
 
 .version {
@@ -302,6 +287,17 @@ p {
   font-weight: 600;
 }
 
+.section-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.section-label-row .action-label {
+  margin-top: 2px;
+}
+
 .module-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -310,15 +306,25 @@ p {
 
 .module-actions button {
   overflow: hidden;
-  padding-inline: 5px;
+  padding: 6px 5px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: var(--border-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.utility-actions {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 6px;
+.module-actions button:hover {
+  color: var(--text-label);
+  background: var(--bg-hover);
+  border-color: var(--scrollbar-thumb-hover);
+}
+
+.compact-button {
+  width: auto;
+  padding: 6px 10px;
+  font-size: 11px;
 }
 
 .stop-scan {
@@ -472,14 +478,21 @@ p {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
+  gap: 4px;
+  width: auto;
   height: 28px;
-  padding: 0;
+  padding: 0 9px;
   color: var(--text-secondary);
+  font-size: 10px;
 }
 
 .icon-button:hover {
   color: var(--accent-text);
+  background: var(--bg-hover);
+}
+
+.icon-button-label {
+  font-weight: 700;
 }
 
 .merchant-search {
@@ -508,9 +521,11 @@ h2 {
 .summary {
   display: grid;
   gap: 8px;
+  min-width: 0;
 }
 
 .card {
+  min-width: 0;
   border: 1px solid var(--border-default);
   border-radius: 8px;
   background: var(--bg-surface);

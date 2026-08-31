@@ -1,0 +1,223 @@
+<!doctype html>
+<!--
+  Local UI preview harness -- NOT part of the shipped extension.
+
+  Loads the real popup.html markup + popup.css + popup.js against a mocked
+  chrome.* API (in-memory storage, fake manifest/tabs) so the actual side
+  panel UI can be looked at and iterated on without loading the extension
+  in Chrome or having a real EH tab open. Seeded with representative sample
+  data across all three modules plus a sample product-audit result so both
+  workspaces have something to look at.
+
+  This file is not referenced by manifest.json and is never loaded by the
+  real extension -- it only exists for visual/CSS iteration during
+  development. Safe to ignore for anything about actual extension behavior.
+-->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EH Assistant Preview</title>
+    <link rel="stylesheet" href="../popup.css" />
+    <script>
+      const memoryStorage = {};
+      window.__previewStorage = memoryStorage;
+
+      window.chrome = {
+        runtime: {
+          getManifest: () => ({ version: "PREVIEW" }),
+          sendMessage: () => {},
+          lastError: null,
+          onMessage: { addListener: () => {} }
+        },
+        storage: {
+          local: {
+            get: (key) => {
+              if (typeof key === "string") return Promise.resolve({ [key]: memoryStorage[key] });
+              return Promise.resolve({});
+            },
+            set: (obj) => { Object.assign(memoryStorage, obj); return Promise.resolve(); },
+            remove: (key) => { delete memoryStorage[key]; return Promise.resolve(); }
+          }
+        },
+        tabs: {
+          query: () => Promise.resolve([{ id: 1, url: "https://admin.engagehub.tsostech.com/catalogue" }]),
+          onUpdated: { addListener: () => {}, removeListener: () => {} },
+          get: () => Promise.resolve({ url: "" }),
+          reload: () => Promise.resolve(),
+          update: () => Promise.resolve()
+        },
+        scripting: { executeScript: () => Promise.resolve() },
+        sidePanel: {}
+      };
+
+      function dateKey(offsetDays) {
+        const d = new Date();
+        d.setDate(d.getDate() + offsetDays);
+        return d.toISOString().slice(0, 10);
+      }
+
+      memoryStorage[`ehAssistant:${dateKey(0)}`] = [
+        {
+          type: "catalogue_merchant_matrix",
+          key: "admin_catalogue_merchant_matrix",
+          label: "运营端 Catalogue Merchant 待办",
+          scannedAt: new Date().toISOString(),
+          rows: [
+            { merchant: "花漾美妆", newProducts: 4, updatedToBeAudit: 12, syncFailure: 3 },
+            { merchant: "极光数码", newProducts: 12, updatedToBeAudit: 0, syncFailure: 1 },
+            { merchant: "山海优选", newProducts: 0, updatedToBeAudit: 0, syncFailure: 0 },
+            { merchant: "云端母婴", newProducts: 0, updatedToBeAudit: 4, syncFailure: 0 },
+            { merchant: "星辰食品", newProducts: 0, updatedToBeAudit: 1, syncFailure: 2 },
+            { merchant: "碧水家居", newProducts: 5, updatedToBeAudit: 0, syncFailure: 0 }
+          ]
+        },
+        {
+          type: "pricing_merchant_matrix",
+          key: "admin_pricing_merchant_matrix",
+          label: "运营端 Pricing Merchant 待办",
+          scannedAt: new Date().toISOString(),
+          rows: [
+            { merchant: "花漾美妆", toBeUpdated: 2, pricingFailedUpdate: 0, costAudit: 1 },
+            { merchant: "极光数码", toBeUpdated: 0, pricingFailedUpdate: 0, costAudit: 0 },
+            { merchant: "山海优选", toBeUpdated: 3, pricingFailedUpdate: 1, costAudit: 0 }
+          ]
+        },
+        {
+          type: "order_merchant_matrix",
+          key: "admin_order_merchant_matrix",
+          label: "运营端 Order Merchant 待办",
+          scannedAt: new Date().toISOString(),
+          rows: [
+            { merchant: "花漾美妆", awaitingFulfillment: 2, partiallyFulfilled: 0, canceled: 1 },
+            { merchant: "星辰食品", awaitingFulfillment: 0, partiallyFulfilled: 1, canceled: 2 },
+            { merchant: "碧水家居", awaitingFulfillment: 0, partiallyFulfilled: 0, canceled: 0 }
+          ]
+        }
+      ];
+
+      // Yesterday's Catalogue-only snapshot, so the trend badge has
+      // something to compare against on that one module.
+      memoryStorage[`ehAssistant:${dateKey(-1)}`] = [
+        {
+          type: "catalogue_merchant_matrix",
+          scannedAt: new Date(Date.now() - 86400000).toISOString(),
+          rows: [
+            { merchant: "花漾美妆", newProducts: 4, updatedToBeAudit: 8, syncFailure: 3 },
+            { merchant: "极光数码", newProducts: 12, updatedToBeAudit: 0, syncFailure: 1 }
+          ]
+        }
+      ];
+    </script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="app-header">
+        <div class="brand-lockup">
+          <img class="brand-logo" src="../icons/icon.svg" alt="" width="40" height="40" />
+          <div>
+            <h1>EH Assistant</h1>
+            <p>Engage Hub 运营助手</p>
+          </div>
+        </div>
+        <div class="header-meta">
+          <span class="version" id="versionLabel"></span>
+        </div>
+      </header>
+
+      <nav class="workspace-tabs" aria-label="功能切换">
+        <button type="button" class="workspace-tab active" data-workspace="todo" aria-selected="true">待办巡检</button>
+        <button type="button" class="workspace-tab" data-workspace="audit" aria-selected="false">商品审核</button>
+      </nav>
+
+      <div id="todoWorkspace" class="workspace-panel">
+        <section class="workspace-heading">
+          <div>
+            <h2>待办巡检</h2>
+            <p>按 Merchant 汇总 Catalogue、Pricing 与 Order 待办</p>
+          </div>
+        </section>
+
+        <section class="actions" aria-label="巡检操作">
+          <button id="scanAll" class="primary one-click">一键巡检</button>
+          <button id="stopScan" class="ghost stop-scan" type="button" hidden>停止巡检</button>
+          <button id="resumeScan" class="ghost stop-scan" type="button" hidden>继续巡检</button>
+          <div class="section-label-row">
+            <div class="action-label">专项巡检</div>
+            <button id="clearToday" class="ghost compact-button">清空记录</button>
+          </div>
+          <div class="module-actions">
+            <button id="autoScanCatalogue">Catalogue</button>
+            <button id="autoScanPricing">Pricing</button>
+            <button id="autoScanOrders">Order</button>
+          </div>
+        </section>
+
+        <section class="status" id="status" aria-live="polite">准备就绪（预览数据，非真实巡检）</section>
+
+        <section class="summary-section">
+          <div class="summary-section-head">
+            <h2>今日待办</h2>
+            <div class="summary-section-actions">
+              <button id="toggleSearch" class="icon-button" type="button" title="搜索 Merchant" aria-label="搜索 Merchant">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <path d="M21 21l-4.35-4.35"></path>
+                </svg>
+                <span class="icon-button-label">搜索</span>
+              </button>
+              <button id="exportCsv" class="icon-button" type="button" title="导出 CSV" aria-label="导出 CSV">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 3v12"></path>
+                  <path d="M7 10l5 5 5-5"></path>
+                  <path d="M4 19h16"></path>
+                </svg>
+                <span class="icon-button-label">CSV</span>
+              </button>
+              <button id="copyReport" class="icon-button" type="button" title="复制待办日报" aria-label="复制待办日报">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                <span class="icon-button-label">复制</span>
+              </button>
+            </div>
+          </div>
+          <input type="search" id="merchantSearch" class="merchant-search" placeholder="搜索 Merchant" aria-label="搜索 Merchant" hidden />
+          <div id="summary" class="summary"></div>
+        </section>
+      </div>
+
+      <div id="auditWorkspace" class="workspace-panel" hidden>
+        <section class="workspace-heading audit-heading">
+          <div>
+            <h2>Catalogue 商品审核</h2>
+            <p>检查当前商品的文案、价格字段与图片背景</p>
+          </div>
+          <button id="auditProduct" class="primary audit-button">审核当前商品</button>
+        </section>
+
+        <section class="status" id="auditStatus" aria-live="polite">预览数据，非真实审核</section>
+        <section id="auditResult" class="audit-result" aria-live="polite" hidden></section>
+      </div>
+    </main>
+    <script src="../shared/background-classifier.js"></script>
+    <script src="../popup.js"></script>
+    <script>
+      // Seed a representative product-audit result so the 商品审核
+      // workspace also has something to look at, mixing all three statuses.
+      renderProductAudit({
+        product: { title: "Reiki 5.5L Mini Gym Duffle Bag" },
+        checks: [
+          { label: "标题规范", status: "pass", detail: "5–10 个词、Title Case，且未包含品牌名。" },
+          { label: "错别字与大小写", status: "pass", detail: "未发现明显的拼写、重复词或标点问题。" },
+          { label: "Description", status: "pass", detail: "未发现明显的 SEO 关键词堆砌或重复内容。" },
+          { label: "明显内容错误", status: "pass", detail: "未发现网址、联系方式等明显内容问题。材质近似表达不作严格比对。" },
+          { label: "价格字段一致性", status: "attention", detail: "同一 SPU 内数值不一致。VIP Price：35.95 USD / 38.95 USD；SRP：49.95 USD / 39.99 USD" },
+          { label: "图片背景", status: "pass", detail: "Media 共 25 张：25 张模特图或纯背景商品图符合灰色背景要求，0 张场景图或信息图豁免。" },
+          { label: "Color Swatch", status: "manual", detail: "4 个色号中有 1 个无法自动判断是否为色块图，需人工确认。原因：浏览器跨域安全限制阻止读取像素：1 张。涉及：Carolina Blue。" }
+        ]
+      });
+    </script>
+  </body>
+</html>

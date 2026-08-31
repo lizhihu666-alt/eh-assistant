@@ -17,7 +17,6 @@
           </div>
         </div>
         <div class="header-meta">
-          <span class="todo-badge" id="todoBadge" hidden>0</span>
           <span class="version" id="versionLabel"></span>
         </div>
       </header>
@@ -39,14 +38,14 @@
           <button id="scanAll" class="primary one-click">一键巡检</button>
           <button id="stopScan" class="ghost stop-scan" type="button" hidden>停止巡检</button>
           <button id="resumeScan" class="ghost stop-scan" type="button" hidden>继续巡检</button>
-          <div class="action-label">专项巡检</div>
+          <div class="section-label-row">
+            <div class="action-label">专项巡检</div>
+            <button id="clearToday" class="ghost compact-button">清空记录</button>
+          </div>
           <div class="module-actions">
             <button id="autoScanCatalogue">Catalogue</button>
             <button id="autoScanPricing">Pricing</button>
             <button id="autoScanOrders">Order</button>
-          </div>
-          <div class="utility-actions">
-            <button id="clearToday" class="ghost">清空记录</button>
           </div>
         </section>
 
@@ -56,22 +55,31 @@
           <div class="summary-section-head">
             <h2>今日待办</h2>
             <div class="summary-section-actions">
+              <button id="toggleSearch" class="icon-button" type="button" title="搜索 Merchant" aria-label="搜索 Merchant">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <path d="M21 21l-4.35-4.35"></path>
+                </svg>
+                <span class="icon-button-label">搜索</span>
+              </button>
               <button id="exportCsv" class="icon-button" type="button" title="导出 CSV" aria-label="导出 CSV">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M12 3v12"></path>
                   <path d="M7 10l5 5 5-5"></path>
                   <path d="M4 19h16"></path>
                 </svg>
+                <span class="icon-button-label">CSV</span>
               </button>
               <button id="copyReport" class="icon-button" type="button" title="复制待办日报" aria-label="复制待办日报">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <rect x="9" y="9" width="13" height="13" rx="2"></rect>
                   <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
                 </svg>
+                <span class="icon-button-label">复制</span>
               </button>
             </div>
           </div>
-          <input type="search" id="merchantSearch" class="merchant-search" placeholder="搜索 Merchant" aria-label="搜索 Merchant" />
+          <input type="search" id="merchantSearch" class="merchant-search" placeholder="搜索 Merchant" aria-label="搜索 Merchant" hidden />
           <div id="summary" class="summary"></div>
         </section>
       </div>

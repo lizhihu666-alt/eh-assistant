@@ -8,7 +8,7 @@
 
 `C:\Users\leohu\Documents\Codex\eh-assistant-mvp`
 
-当前版本：`v0.18.1`
+当前版本：`v0.19.0`
 
 版本号只需要维护 `manifest.json` 一处：`popup.html`/`popup.js` 会在加载时通过 `chrome.runtime.getManifest().version` 动态读取并显示，不再在多个文件里手写版本号字符串。
 
@@ -97,6 +97,10 @@ Color Swatch 图片审核规则（`Color Swatch Image` 列，独立于 `Media` �
 - 后续可能会根据用户提供的 Figma 截图重新实现界面。
 - UI 改造时必须保留现有扫描、统计、图片读取和商品审核逻辑，不要因重构界面破坏已调通的业务流程。
 - `popup.css` 已经改为基于 CSS 自定义属性（`--bg-page`、`--text-primary` 等）的浅色/深色双主题结构，深色主题通过 `@media (prefers-color-scheme: dark)` 覆盖同名变量实现，跟随系统主题自动切换。新增样式请复用已有变量，不要重新写死颜色值，否则会在深色模式下失效。
+- 待办总数徽标（header 里的红色数字）已经按用户反馈整个移除，不要再加回来。
+- 「专项巡检」三个按钮和「清空记录」现在共用一行（`.section-label-row`），「清空记录」缩小为次要样式（`.compact-button`），不再是满宽按钮；「Catalogue/Pricing/Order」三个按钮也弱化成了浅色次要样式，与醒目的「一键巡检」形成主次对比。这几处都是用户明确要求的视觉调整，改动前请先确认用户是否仍然认可这个方向。
+- Merchant 搜索框默认收起，「今日待办」标题右侧多了一个搜索图标（跟 CSV/复制两个图标同一行），点击展开输入框并自动聚焦，再点一次会收起并清空搜索词、恢复完整数据。
+- 修复过一个 CSS Grid 溢出 bug：`.summary`/`.card` 之前没有 `min-width: 0`，导致 Merchant 矩阵表格的内容会把整个侧边栏页面撑宽，而不是像预期那样只在 `.matrix-wrap` 自己的框内横向滚动。这个问题在真实 Chrome 侧边栏里可能被浏览器的固定宽度机制部分遮住，但本质上是布局 bug，已经修掉。
 
 ## 关键文件
 
@@ -108,6 +112,7 @@ Color Swatch 图片审核规则（`Color Swatch Image` 列，独立于 `Media` �
 - `background.js`：Side Panel 配置及受限图片域名的后台读取。
 - `shared/background-classifier.js`：`content.js` 和 `popup.js` 共用的图片背景色判定核心算法。
 - `tests/tests.html` + `tests/tests.js`：纯函数单元测试（标题/描述检查、价格一致性判断依赖 DOM 未纳入、`Media` 背景色分类、Color Swatch 色块图判断）。这台开发机没有装 Node，所以测试不走 `npm test`，而是直接在 Chrome 里打开 `tests/tests.html` 运行，结果显示在页面上。修改 `content.js` 或 `shared/background-classifier.js` 里的纯函数逻辑后，应该重新打开这个文件确认仍然全部 PASS。
+- `preview/popup-preview.html` + `preview/_serve.ps1`：本地 UI 预览工具，不属于插件本身、不会被 Chrome 加载。用真实的 `popup.html`/`popup.css`/`popup.js` 配合内存版 `chrome.*` mock 和一批模拟数据渲染整个侧边栏界面，用于跟用户对着实时预览做视觉/交互方面的精细化调整，不需要登录真实 EH 或加载扩展。`_serve.ps1` 是一个基于 PowerShell `HttpListener` 的静态文件服务器（监听 `http://127.0.0.1:8792/`），因为这台机器上 `file://` 页面在浏览器工具里只会被当成静态快照渲染、不会真正执行脚本。修改 `popup.html` 里的结构时，如果同一处也在 `preview/popup-preview.html` 里有对应标记，要同步改一份，否则预览会跟真实页面不一致。
 - `README.md`：功能与安装说明。
 
 ## 图片与网站权限
