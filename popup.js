@@ -1003,6 +1003,11 @@ async function runCatalogueScan({ resume } = {}) {
       await delay(500);
       rows = [];
       startIndex = 0;
+      // Checkpoint immediately, before the first Merchant even starts -- if
+      // the panel gets interrupted (e.g. Chrome suspends a hidden side panel
+      // after the window loses focus for a while) before Merchant 1 finishes,
+      // there would otherwise be nothing saved yet for "继续巡检" to resume.
+      await saveScanProgress("catalogue", { merchants, nextMerchantIndex: startIndex, rows });
     }
 
     for (let merchantIndex = startIndex; merchantIndex < merchants.length; merchantIndex += 1) {
@@ -1118,6 +1123,7 @@ async function runOrderScan({ resume } = {}) {
       await delay(500);
       rows = [];
       startIndex = 0;
+      await saveScanProgress("order", { merchants, nextMerchantIndex: startIndex, rows });
     }
 
     for (let merchantIndex = startIndex; merchantIndex < merchants.length; merchantIndex += 1) {
@@ -1259,6 +1265,14 @@ async function runPricingScan({ resume } = {}) {
           throw new Error(`${pageConfig.label} 没有读取到 Merchant 列表，扫描已停止。`);
         }
         merchantStartIndex = 0;
+        await saveScanProgress("pricing", {
+          pageIndex,
+          pageLabel: pageConfig.label,
+          merchants,
+          nextMerchantIndex: merchantStartIndex,
+          rowMap: Object.fromEntries(rowMap),
+          merchantOrder
+        });
       }
 
       for (let merchantIndex = merchantStartIndex; merchantIndex < merchants.length; merchantIndex += 1) {
