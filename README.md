@@ -18,8 +18,8 @@
 - 生成只包含非零待办 Merchant 的精简中文日报。
 - 在运营端 Catalogue 商品详情页执行只读辅助审核：标题、Description、同一 SPU 的价格字段一致性，以及 Media 列纯背景商品图/模特图的灰色背景（场景图不参与背景色检查）。
 - 同时检查 Color Swatch Image 列：图片链接不能为空，且应为纯色块图而不是产品实拍图。
-- 支持从 EH 图片域名与 Shopify 官方 CDN 在扩展后台读取 Media 图片并进行本地像素分析；图片不上传、不保存。其他图片源无法读取时，才尝试当前 EH 页面截图作为备用方案。
-- EH 图片通过限定域名 `img.engagehub.tsostech.com` 在扩展后台读取，避免网页跨域限制；不申请其他网站的图片访问权限。
+- 支持从 EH 图片域名、Shopify 官方 CDN 与商家媒体存储桶（`prodenv-merchant-public.s3.us-west-2.amazonaws.com`）在扩展后台读取 Media 图片并进行本地像素分析；图片不上传、不保存。其他图片源无法读取时，才尝试当前 EH 页面截图作为备用方案。
+- EH 图片通过限定域名 `img.engagehub.tsostech.com`、`cdn.shopify.com`、`prodenv-merchant-public.s3.us-west-2.amazonaws.com` 在扩展后台读取，避免网页跨域限制；不申请其他网站的图片访问权限。
 
 ## 使用方式
 

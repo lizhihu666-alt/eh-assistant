@@ -2,14 +2,15 @@
   "manifest_version": 3,
   "name": "EH Assistant",
   "description": "Read-only daily todo summary for Engage Hub.",
-  "version": "0.19.1",
+  "version": "0.20.0",
   "minimum_chrome_version": "114",
   "permissions": ["activeTab", "tabs", "storage", "clipboardWrite", "sidePanel", "scripting"],
   "host_permissions": [
     "https://admin.engagehub.tsostech.com/*",
     "https://engagehub.tsostech.com/*",
     "https://img.engagehub.tsostech.com/*",
-    "https://cdn.shopify.com/*"
+    "https://cdn.shopify.com/*",
+    "https://prodenv-merchant-public.s3.us-west-2.amazonaws.com/*"
   ],
   "action": {
     "default_title": "打开 EH Assistant",

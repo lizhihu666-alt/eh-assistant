@@ -8,7 +8,7 @@
 
 `C:\Users\leohu\Documents\Codex\eh-assistant-mvp`
 
-当前版本：`v0.19.1`
+当前版本：`v0.20.0`
 
 版本号只需要维护 `manifest.json` 一处：`popup.html`/`popup.js` 会在加载时通过 `chrome.runtime.getManifest().version` 动态读取并显示，不再在多个文件里手写版本号字符串。
 
@@ -77,7 +77,7 @@
 - 场景图、尺码表及其他信息图豁免背景色检查。
 - 当前算法使用角落背景聚类与边缘占比，避免人物触及图片边缘时被误判为场景图。
 - 已使用一组真实 EH 图片验证：前 6 张模特图均正确进入背景检查并读取为 `#E8E8E8`，最后 1 张尺码表正确识别为信息图并豁免。
-- 支持读取 `img.engagehub.tsostech.com` 和 `cdn.shopify.com` 图片。
+- 支持读取 `img.engagehub.tsostech.com`、`cdn.shopify.com` 和 `prodenv-merchant-public.s3.us-west-2.amazonaws.com`（多数商品的 Media 图片实际存放在这里）图片。
 - 图片由扩展后台读取后在本地分析，避免网页跨域限制；其他来源才尝试页面截图备用方案。
 
 Color Swatch 图片审核规则（`Color Swatch Image` 列，独立于 `Media` 列检查）：
@@ -109,7 +109,7 @@ Color Swatch 图片审核规则（`Color Swatch Image` 列，独立于 `Media` �
 - `popup.html`：Side Panel 页面结构。
 - `popup.css`：Side Panel 视觉样式与表格布局，浅色/深色双主题变量定义在文件顶部 `:root` 和 `@media (prefers-color-scheme: dark)` 里。
 - `popup.js`：界面状态、巡检调度、本地存储、日报、CSV 导出、Merchant 搜索/排序、同比昨日趋势、商品审核结果展示及截图备用逻辑。
-- `content.js`：EH 页面识别、Merchant 遍历、tab 切换、数量读取、商品内容审核和图片分类；文件末尾有一个仅供 `tests/tests.html` 使用的测试导出钩子（`window.__EH_ASSISTANT_TEST__` 为 true 时才会挂载 `window.__ehAssistantInternal`），真实 EH 页面上不会触发。
+- `content.js`：EH 页面识别、Merchant 遍历、tab 切换、数量读取、商品内容审核和图片分类；文件末尾有一个仅供测试使用的导出钩子（`window.__EH_ASSISTANT_TEST__` 为 true 时才会挂载 `window.__ehAssistantInternal`，暴露了纯函数检查、色块判断和 `loadCandidateImage` 供临时验证图片域名白名单是否命中），真实 EH 页面上不会触发。
 - `background.js`：Side Panel 配置及受限图片域名的后台读取。
 - `shared/background-classifier.js`：`content.js` 和 `popup.js` 共用的图片背景色判定核心算法。
 - `tests/tests.html` + `tests/tests.js`：纯函数单元测试（标题/描述检查、价格一致性判断依赖 DOM 未纳入、`Media` 背景色分类、Color Swatch 色块图判断）。这台开发机没有装 Node，所以测试不走 `npm test`，而是直接在 Chrome 里打开 `tests/tests.html` 运行，结果显示在页面上。修改 `content.js` 或 `shared/background-classifier.js` 里的纯函数逻辑后，应该重新打开这个文件确认仍然全部 PASS。
@@ -124,8 +124,11 @@ Color Swatch 图片审核规则（`Color Swatch Image` 列，独立于 `Media` �
 - `https://engagehub.tsostech.com/*`
 - `https://img.engagehub.tsostech.com/*`
 - `https://cdn.shopify.com/*`
+- `https://prodenv-merchant-public.s3.us-west-2.amazonaws.com/*`
 
 不要随意扩展为 `<all_urls>`。新增图片域名时应使用最小范围的精确权限，并解释原因。
+
+`prodenv-merchant-public.s3.us-west-2.amazonaws.com` 是 2026-08-31 新加的：用户反馈某个商品的「图片背景」和「Color Swatch」检查全部显示「人工查看」，原因是"跨域安全限制阻止读取像素"，且截图兜底方案也因为 `activeTab` 权限过期而失败。让用户在真实商品页面右键检查了一张 Media 图片的 `<img src>`，发现该商品的 Media 图片实际存放在这个 S3 桶上，不在原先的两个白名单域名里，所以直接读取像素这条路一开始就走不通、只能碰运气去撤退到会过期的截图方案。加入这个域名后，`content.js` 的 `loadCandidateImage()` 和 `background.js` 的 `allowedImageHosts` 都会把这个域名当作后台读取的白名单来源，不再需要截图兜底。这条经验说明：以后如果又看到"图片背景/Color Swatch 全部人工查看，原因是跨域限制"，第一反应应该是怀疑图片域名不在白名单里，而不是怀疑判断算法本身有问题。
 
 ## 开发与验证规范
 

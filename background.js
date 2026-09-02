@@ -26,7 +26,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== "EH_ASSISTANT_FETCH_IMAGE") return;
   (async () => {
     const url = new URL(message.url);
-    const allowedImageHosts = new Set(["img.engagehub.tsostech.com", "cdn.shopify.com"]);
+    const allowedImageHosts = new Set([
+      "img.engagehub.tsostech.com",
+      "cdn.shopify.com",
+      "prodenv-merchant-public.s3.us-west-2.amazonaws.com"
+    ]);
     if (url.protocol !== "https:" || !allowedImageHosts.has(url.hostname)) {
       throw new Error(`图片域名不在允许列表：${url.hostname || "unknown"}`);
     }

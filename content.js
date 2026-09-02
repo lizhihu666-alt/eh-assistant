@@ -773,7 +773,11 @@
     } catch (_error) {
       hostname = "";
     }
-    if (["img.engagehub.tsostech.com", "cdn.shopify.com"].includes(hostname)) {
+    if ([
+      "img.engagehub.tsostech.com",
+      "cdn.shopify.com",
+      "prodenv-merchant-public.s3.us-west-2.amazonaws.com"
+    ].includes(hostname)) {
       const response = await new Promise(resolve => {
         chrome.runtime.sendMessage({ type: "EH_ASSISTANT_FETCH_IMAGE", url: candidate.url }, result => {
           if (chrome.runtime.lastError) resolve(null);
@@ -1179,7 +1183,8 @@
       majorContentChecks,
       classifySwatchLikelihood,
       colorSwatchColumnStatus,
-      colorSwatchCheck
+      colorSwatchCheck,
+      loadCandidateImage
     };
   }
 })();
