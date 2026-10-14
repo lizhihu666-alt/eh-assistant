@@ -20,6 +20,7 @@
 - 同时检查 Color Swatch Image 列：图片链接不能为空，且应为纯色块图而不是产品实拍图。
 - 支持从 EH 图片域名、Shopify 官方 CDN 与商家媒体存储桶（`prodenv-merchant-public.s3.us-west-2.amazonaws.com`）在扩展后台读取 Media 图片并进行本地像素分析；图片不上传、不保存。其他图片源无法读取时，才尝试当前 EH 页面截图作为备用方案。
 - EH 图片通过限定域名 `img.engagehub.tsostech.com`、`cdn.shopify.com`、`prodenv-merchant-public.s3.us-west-2.amazonaws.com` 在扩展后台读取，避免网页跨域限制；不申请其他网站的图片访问权限。
+- 「一键优化」：按品类规范调用 AI（Anthropic / OpenAI / DeepSeek / 公司 AI 网关 四选一）生成建议 Title/Description，侧边栏里每项都配「复制」和「一键填入」两个按钮——「一键填入」会把内容填进 EH 页面 Editor 的输入框（如同手动输入），但不会点击 EH 自己的保存/提交按钮，填入后仍需你自己确认并保存。需要在设置面板里选择服务商并自行配置对应的 API Key。品类识别会先看页面的品类字段，识别不出来再从商品标题/描述里猜，还是猜不出来才需要手动选择。
 
 ## 使用方式
 
@@ -51,3 +52,4 @@ Side Panel 打开后，可以继续点击和查看 EH 页面，面板不会因�
 - 不会点击 Approve、Reject、Retry、Save、Submit、Fulfill、Cancel Order 等业务操作。
 - 不会提交、审核、发货、取消订单或修改任何数据。
 - 统计结果只保存在本地浏览器。
+- 「一键优化」是唯一会把数据发到扩展之外、也是唯一会改动页面输入内容的功能：只发送商品现有的 Title/Description 文本给你选择的 AI 服务商（Anthropic / OpenAI / DeepSeek / 公司 AI 网关）生成文案建议，不发送图片；生成结果可以「一键填入」EH 页面 Editor 的输入框，但插件不会点击 Save/Submit，是否保存、何时保存仍由你自己决定。

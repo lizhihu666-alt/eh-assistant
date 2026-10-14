@@ -41,7 +41,7 @@
   --scrollbar-thumb: #c2cad5;
   --scrollbar-thumb-hover: #9eabbc;
   --empty-border: #ced6e0;
-  font-family: Inter, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+  font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
   color: var(--text-primary);
   background: var(--bg-page);
 }
@@ -67,8 +67,8 @@
     --text-label: #dbe1e9;
     --text-muted: #8994a3;
     --text-faint: #55606f;
-    --accent: #5b8cff;
-    --accent-hover: #7ba0ff;
+    --accent: #3d6fe0;
+    --accent-hover: #2f5bc0;
     --accent-text: #7ba0ff;
     --danger-border: #4a3138;
     --danger-text: #ef8b93;
@@ -191,8 +191,9 @@ p {
 .header-meta {
   display: flex;
   flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
 }
 
 .version {
@@ -201,14 +202,20 @@ p {
   border-radius: 6px;
   background: var(--bg-surface);
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   padding: 4px 6px;
 }
 
+.author-credit {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
 .workspace-tabs {
+  position: relative;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 4px;
   margin-bottom: 16px;
   padding: 4px;
@@ -217,7 +224,32 @@ p {
   background: var(--bg-muted);
 }
 
+/* A single pill that slides to whichever tab is active (JS sets its
+   transform/width from the active button's measured position) instead of
+   each button flipping its own background on -- the click-to-click jump
+   read as an abrupt on/off toggle rather than a switch between positions. */
+.workspace-tabs-indicator {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  height: calc(100% - 8px);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.1);
+  transition: transform 200ms ease;
+  pointer-events: none;
+  z-index: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-tabs-indicator {
+    transition: none;
+  }
+}
+
 .workspace-tab {
+  position: relative;
+  z-index: 1;
   min-height: 36px;
   border: 0;
   background: transparent;
@@ -226,13 +258,11 @@ p {
 
 .workspace-tab:hover {
   border: 0;
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--bg-hover);
 }
 
 .workspace-tab.active {
-  background: var(--bg-surface);
   color: var(--accent-text);
-  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.1);
 }
 
 .workspace-panel[hidden] {
@@ -346,6 +376,8 @@ p {
   flex: 0 0 auto;
   width: auto;
   min-width: 110px;
+  min-height: 40px;
+  font-weight: 700;
 }
 
 .audit-result {
@@ -376,7 +408,7 @@ p {
 .audit-check-head span {
   flex: 0 0 auto;
   border-radius: 5px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   padding: 3px 6px;
 }
@@ -410,13 +442,156 @@ p {
 .audit-note {
   margin-top: 4px;
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.45;
+  /* Some checks (Color Swatch) join a per-item breakdown with real newlines
+     instead of one run-on sentence; pre-line renders those as line breaks
+     while still collapsing incidental whitespace and wrapping normally. */
+  white-space: pre-line;
 }
 
 .audit-note {
   padding-top: 8px;
   border-top: 1px solid var(--border-muted);
+}
+
+/* Previously sat in the same flex row as the "一键优化" primary button,
+   competing with it for attention right where the eye lands after the
+   heading. Moved to read as a quiet inline link under the description text
+   instead -- same tier as the description, not the primary action. */
+.optimize-settings-link {
+  margin-top: 6px;
+  height: auto;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.optimize-settings-link:hover {
+  background: transparent;
+}
+
+.ai-settings:not([hidden]) {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 2px 2px;
+  border-top: 1px dashed var(--border-muted);
+}
+
+.ai-settings-field:not([hidden]) {
+  display: grid;
+  gap: 4px;
+}
+
+.ai-settings-field span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ai-settings-field input,
+.ai-settings-field select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border-input);
+  border-radius: 6px;
+  background: var(--bg-surface-alt);
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.ai-settings-hint {
+  min-height: 14px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.ai-settings-hint.saved {
+  color: var(--pass-text);
+}
+
+.optimize-result:not([hidden]) {
+  display: grid;
+  gap: 10px;
+}
+
+.optimize-category {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.optimize-category select {
+  padding: 5px 8px;
+  border: 1px solid var(--border-input);
+  border-radius: 6px;
+  background: var(--bg-surface-alt);
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.optimize-block {
+  padding: 9px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-hover);
+}
+
+.optimize-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.optimize-block-head strong {
+  color: var(--text-label);
+  font-size: 11px;
+}
+
+.optimize-word-count {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.optimize-word-count.over-limit {
+  color: var(--attention-text);
+}
+
+.optimize-block-text {
+  color: var(--text-body);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.optimize-translation {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.optimize-block-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.optimize-copy {
+  width: auto;
+  padding: 5px 10px;
+  font-size: 11px;
 }
 
 .ghost {
@@ -483,7 +658,7 @@ p {
   height: 28px;
   padding: 0 9px;
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .icon-button:hover {
@@ -493,6 +668,15 @@ p {
 
 .icon-button-label {
   font-weight: 700;
+}
+
+.icon-button .chevron {
+  flex: 0 0 auto;
+  transition: transform 0.15s ease;
+}
+
+.icon-button[aria-expanded="true"] .chevron {
+  transform: rotate(180deg);
 }
 
 .merchant-search {
@@ -545,7 +729,7 @@ h2 {
 
 .meta {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .line {
@@ -598,7 +782,7 @@ h2 {
 .trend {
   flex: 0 0 auto;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   padding: 2px 7px;
   white-space: nowrap;
@@ -623,7 +807,7 @@ h2 {
   border-spacing: 0;
   table-layout: fixed;
   color: var(--text-label);
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 

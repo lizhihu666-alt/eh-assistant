@@ -122,19 +122,21 @@
         </div>
         <div class="header-meta">
           <span class="version" id="versionLabel"></span>
+          <span class="author-credit">Created by Leo Hu</span>
         </div>
       </header>
 
       <nav class="workspace-tabs" aria-label="功能切换">
+        <span class="workspace-tabs-indicator" aria-hidden="true"></span>
         <button type="button" class="workspace-tab active" data-workspace="todo" aria-selected="true">待办巡检</button>
         <button type="button" class="workspace-tab" data-workspace="audit" aria-selected="false">商品审核</button>
+        <button type="button" class="workspace-tab" data-workspace="optimize" aria-selected="false">一键优化</button>
       </nav>
 
       <div id="todoWorkspace" class="workspace-panel">
         <section class="workspace-heading">
           <div>
             <h2>待办巡检</h2>
-            <p>按 Merchant 汇总 Catalogue、Pricing 与 Order 待办</p>
           </div>
         </section>
 
@@ -200,8 +202,57 @@
         <section class="status" id="auditStatus" aria-live="polite">预览数据，非真实审核</section>
         <section id="auditResult" class="audit-result" aria-live="polite" hidden></section>
       </div>
+
+      <div id="optimizeWorkspace" class="workspace-panel" hidden>
+        <section class="workspace-heading audit-heading">
+          <div>
+            <h2>一键优化 Title / Description</h2>
+            <p>按品类规范调用 AI 生成建议文案，仅展示，不写入 EH 页面</p>
+            <button id="aiSettingsToggle" class="icon-button optimize-settings-link" type="button" title="展开 AI 设置" aria-label="AI 设置" aria-expanded="false">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              </svg>
+              <span class="icon-button-label">AI 设置</span>
+              <svg class="chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M6 9l6 6 6-6"></path>
+              </svg>
+            </button>
+          </div>
+          <button id="optimizeProduct" class="primary audit-button">一键优化</button>
+        </section>
+
+        <section id="aiSettingsPanel" class="ai-settings" hidden>
+          <label class="ai-settings-field">
+            <span>AI 服务商</span>
+            <select id="aiProviderSelect">
+              <option value="anthropic">Anthropic（Claude）</option>
+              <option value="openai">OpenAI</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="company">公司 AI 网关（DeepSeek V4 Pro）</option>
+            </select>
+          </label>
+          <label class="ai-settings-field">
+            <span>API Key</span>
+            <input type="password" id="aiApiKeyInput" autocomplete="off" placeholder="sk-..." />
+          </label>
+          <label class="ai-settings-field">
+            <span>Model</span>
+            <select id="aiModelSelect"></select>
+          </label>
+          <label class="ai-settings-field" id="aiModelCustomField" hidden>
+            <span>自定义 Model ID</span>
+            <input type="text" id="aiModelCustomInput" autocomplete="off" placeholder="输入完整 model id" />
+          </label>
+          <div class="ai-settings-hint" id="aiSettingsHint"></div>
+        </section>
+
+        <section class="status" id="optimizeStatus" aria-live="polite">预览数据，非真实调用</section>
+        <section id="optimizeResult" class="audit-result optimize-result" aria-live="polite" hidden></section>
+      </div>
     </main>
     <script src="../shared/background-classifier.js"></script>
+    <script src="../shared/optimize-templates.js"></script>
     <script src="../popup.js"></script>
     <script>
       // Seed a representative product-audit result so the 商品审核
@@ -218,6 +269,17 @@
           { label: "Color Swatch", status: "manual", detail: "4 个色号中有 1 个无法自动判断是否为色块图，需人工确认。原因：浏览器跨域安全限制阻止读取像素：1 张。涉及：Carolina Blue。" }
         ]
       });
+
+      // Seed a representative "一键优化" result so the new panel also has
+      // something to look at -- mirrors what renderOptimizeResult() would
+      // show after a real AI call, using the Pumps template as an example.
+      renderOptimizeResult(
+        {
+          title: "Sophia Pointed Toe Stiletto Satin Pumps",
+          description: "Elegant satin pumps designed with pointed toes and sleek stiletto heels for sophisticated occasion styling.\nMaterial: Satin\nHeel Height: 4\"\nFeatures: Slip Resistant\nClosure: Slip On\nStyle: Elegant\nOccasion: Party\nToe: Pointed Toe\nSize Fit: Regular Width\nHardware: Rhinestone Buckle\nStrap: Adjustable Strap"
+        },
+        { category1: "Shoes", category2: "Pumps", category3: "" }
+      );
     </script>
   </body>
 </html>

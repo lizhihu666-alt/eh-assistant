@@ -5,6 +5,17 @@ const autoScanCatalogueButton = document.getElementById("autoScanCatalogue");
 const autoScanOrdersButton = document.getElementById("autoScanOrders");
 const autoScanPricingButton = document.getElementById("autoScanPricing");
 const auditProductButton = document.getElementById("auditProduct");
+const optimizeProductButton = document.getElementById("optimizeProduct");
+const optimizeStatusBox = document.getElementById("optimizeStatus");
+const optimizeResultBox = document.getElementById("optimizeResult");
+const aiSettingsToggle = document.getElementById("aiSettingsToggle");
+const aiSettingsPanel = document.getElementById("aiSettingsPanel");
+const aiProviderSelect = document.getElementById("aiProviderSelect");
+const aiApiKeyInput = document.getElementById("aiApiKeyInput");
+const aiModelSelect = document.getElementById("aiModelSelect");
+const aiModelCustomField = document.getElementById("aiModelCustomField");
+const aiModelCustomInput = document.getElementById("aiModelCustomInput");
+const aiSettingsHint = document.getElementById("aiSettingsHint");
 const copyButton = document.getElementById("copyReport");
 const exportCsvButton = document.getElementById("exportCsv");
 const clearButton = document.getElementById("clearToday");
@@ -13,8 +24,10 @@ const auditStatusBox = document.getElementById("auditStatus");
 const summaryBox = document.getElementById("summary");
 const auditResultBox = document.getElementById("auditResult");
 const workspaceTabs = [...document.querySelectorAll("[data-workspace]")];
+const workspaceTabsIndicator = document.querySelector(".workspace-tabs-indicator");
 const todoWorkspace = document.getElementById("todoWorkspace");
 const auditWorkspace = document.getElementById("auditWorkspace");
+const optimizeWorkspace = document.getElementById("optimizeWorkspace");
 const versionLabel = document.getElementById("versionLabel");
 const merchantSearchInput = document.getElementById("merchantSearch");
 const toggleSearchButton = document.getElementById("toggleSearch");
@@ -22,6 +35,7 @@ let summaryView = "todo";
 let oneClickRunning = false;
 let cancelRequested = false;
 let currentSnapshots = [];
+let currentSnapshotDateKey = "";
 let yesterdaySnapshots = [];
 let searchQuery = "";
 const sortState = {};
@@ -140,6 +154,12 @@ function moduleTotal(rows, fields) {
 }
 
 function moduleTrendLabel(type, rows) {
+  // yesterdaySnapshots is always literally "yesterday relative to right now",
+  // so the comparison only makes sense while the displayed snapshots are
+  // actually today's -- once refresh() has fallen back to an older day's
+  // data (see findMostRecentSnapshots), "较昨日" would be comparing the
+  // wrong pair of days and could show a misleading delta.
+  if (currentSnapshotDateKey !== todayKey()) return "";
   const yesterdaySnapshot = yesterdaySnapshots.find(snapshot => snapshot.type === type);
   if (!yesterdaySnapshot) return "";
   const fields = MODULE_FIELDS[type];
@@ -168,20 +188,175 @@ function setAuditStatus(text) {
   auditStatusBox.textContent = text;
 }
 
+function setOptimizeStatus(text) {
+  optimizeStatusBox.textContent = text;
+}
+
+// AI config (provider + API key + optional model override) lives in
+// chrome.storage.local, same pattern as loadScanProgress/saveScanProgress.
+// The key never leaves this machine except in the direct request background.js
+// makes to the selected provider's own API.
+const aiConfigStorageKey = "ehAssistant:aiConfig";
+
+async function loadAiConfig() {
+  const result = await chrome.storage.local.get(aiConfigStorageKey);
+  return result[aiConfigStorageKey] || null;
+}
+
+async function saveAiConfig(config) {
+  await chrome.storage.local.set({ [aiConfigStorageKey]: config });
+}
+
+// A short curated model list per provider so the settings panel can offer a
+// dropdown instead of a free-text field. "" always means "let background.js
+// use that provider's own default". A "custom" option is included on every
+// provider since AI providers ship new model ids often enough that a fixed
+// list here will eventually go stale -- picking "custom" reveals a plain
+// text field for typing any model id directly.
+const AI_PROVIDER_MODELS = {
+  anthropic: [
+    { value: "", label: "默认（claude-sonnet-5）" },
+    { value: "claude-opus-5", label: "Claude Opus 5（最强，速度较慢/更贵）" },
+    { value: "claude-sonnet-5", label: "Claude Sonnet 5（推荐，性价比均衡）" },
+    { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5（最快最便宜）" },
+    { value: "custom", label: "自定义..." }
+  ],
+  openai: [
+    { value: "", label: "默认（gpt-4o-mini）" },
+    { value: "gpt-5", label: "GPT-5（最强）" },
+    { value: "gpt-5-mini", label: "GPT-5 Mini（性价比均衡）" },
+    { value: "gpt-4o-mini", label: "GPT-4o Mini（便宜稳定）" },
+    { value: "custom", label: "自定义..." }
+  ],
+  deepseek: [
+    { value: "", label: "默认（deepseek-chat）" },
+    { value: "deepseek-chat", label: "DeepSeek Chat（V3，通用）" },
+    { value: "deepseek-reasoner", label: "DeepSeek Reasoner（R1，推理增强，较慢）" },
+    { value: "custom", label: "自定义..." }
+  ],
+  // Company-internal LiteLLM gateway. Confirmed 2026-09-20: both models are
+  // reasoning models on this gateway's backend, but background.js sends
+  // enable_thinking:false for every "company" request regardless of which
+  // one is picked here, so v4-flash responds in ~2s instead of ~15s+ with
+  // no quality loss -- that's the default now. "custom" stays as the escape
+  // hatch for whenever the gateway team adds more models to this Key.
+  company: [
+    { value: "", label: "默认（JF Merchant Center Management-deepseek-v4-flash，快）" },
+    { value: "JF Merchant Center Management-deepseek-v4-pro", label: "JF Merchant Center Management-deepseek-v4-pro（慢，Key 若只授权 flash 会 403）" },
+    { value: "custom", label: "自定义..." }
+  ]
+};
+
+const validAiProviders = new Set(Object.keys(AI_PROVIDER_MODELS));
+const AI_PROVIDER_LABELS = { anthropic: "Anthropic", openai: "OpenAI", deepseek: "DeepSeek", company: "公司 AI 网关" };
+
+// Rebuilds the Model dropdown for `provider` and selects `selectedModel`
+// (falling back to the "custom" option + custom text field if it's not one
+// of the known values -- covers both an explicitly typed custom model and a
+// stale/newer id from a provider whose lineup moved on since this list was
+// last updated).
+function populateModelOptions(provider, selectedModel) {
+  const options = AI_PROVIDER_MODELS[provider] || AI_PROVIDER_MODELS.anthropic;
+  const knownValues = new Set(options.map(option => option.value).filter(value => value && value !== "custom"));
+  const isCustom = !!selectedModel && !knownValues.has(selectedModel);
+  aiModelSelect.innerHTML = options
+    .map(option => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`)
+    .join("");
+  aiModelSelect.value = isCustom ? "custom" : (selectedModel || "");
+  aiModelCustomField.hidden = aiModelSelect.value !== "custom";
+  aiModelCustomInput.value = isCustom ? selectedModel : "";
+}
+
+function showAiSettingsHint(text, tone) {
+  aiSettingsHint.textContent = text;
+  aiSettingsHint.classList.toggle("saved", tone === "saved");
+}
+
+function currentModelValue() {
+  return aiModelSelect.value === "custom" ? aiModelCustomInput.value.trim() : aiModelSelect.value;
+}
+
+// No explicit "保存" button: every field change either saves immediately or
+// (when there's nothing valid to save yet) shows an inline hint saying so,
+// so it's never ambiguous whether a change has taken effect.
+async function maybeAutoSaveAiConfig() {
+  const provider = validAiProviders.has(aiProviderSelect.value) ? aiProviderSelect.value : "anthropic";
+  const apiKey = aiApiKeyInput.value.trim();
+  const model = currentModelValue();
+  if (!apiKey) {
+    showAiSettingsHint(`请填写 ${AI_PROVIDER_LABELS[provider]} 的 API Key`, "muted");
+    return;
+  }
+  if (aiModelSelect.value === "custom" && !model) {
+    showAiSettingsHint("请填写自定义 Model ID", "muted");
+    return;
+  }
+  await saveAiConfig({ provider, apiKey, model });
+  showAiSettingsHint("已自动保存 ✓", "saved");
+}
+
+aiProviderSelect.addEventListener("change", () => {
+  // Switching provider clears the key field rather than silently reusing
+  // whatever was typed for the previous provider (which almost certainly
+  // won't work against the new one) -- the hint then guides the next step.
+  aiApiKeyInput.value = "";
+  populateModelOptions(aiProviderSelect.value, "");
+  showAiSettingsHint(`已切换到 ${AI_PROVIDER_LABELS[aiProviderSelect.value]}，请重新填写对应的 API Key（不同服务商的 Key 不通用，已自动清空）`, "muted");
+});
+
+aiApiKeyInput.addEventListener("change", () => {
+  maybeAutoSaveAiConfig();
+});
+
+aiModelSelect.addEventListener("change", () => {
+  aiModelCustomField.hidden = aiModelSelect.value !== "custom";
+  if (aiModelSelect.value !== "custom") maybeAutoSaveAiConfig();
+  else showAiSettingsHint("请填写自定义 Model ID", "muted");
+});
+
+aiModelCustomInput.addEventListener("change", () => {
+  maybeAutoSaveAiConfig();
+});
+
+populateModelOptions("anthropic", "");
+
+const WORKSPACE_PANELS = { todo: todoWorkspace, audit: auditWorkspace, optimize: optimizeWorkspace };
+
+// Slides the pill indicator to sit exactly under the active tab button.
+// Measuring the real button (offsetLeft/offsetWidth) instead of computing a
+// position from the column count keeps this correct regardless of how many
+// tabs there are or whether their widths ever stop being equal.
+function updateWorkspaceIndicator(activeButton) {
+  if (!workspaceTabsIndicator || !activeButton) return;
+  workspaceTabsIndicator.style.width = `${activeButton.offsetWidth}px`;
+  workspaceTabsIndicator.style.transform = `translateX(${activeButton.offsetLeft}px)`;
+}
+
 function setWorkspace(workspace) {
-  const activeWorkspace = workspace === "audit" ? "audit" : "todo";
-  todoWorkspace.hidden = activeWorkspace !== "todo";
-  auditWorkspace.hidden = activeWorkspace !== "audit";
+  const activeWorkspace = WORKSPACE_PANELS[workspace] ? workspace : "todo";
+  Object.entries(WORKSPACE_PANELS).forEach(([name, panel]) => {
+    panel.hidden = name !== activeWorkspace;
+  });
+  let activeButton = null;
   workspaceTabs.forEach(button => {
     const active = button.dataset.workspace === activeWorkspace;
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
+    if (active) activeButton = button;
   });
+  updateWorkspaceIndicator(activeButton);
   localStorage.setItem("ehAssistantWorkspace", activeWorkspace);
 }
 
 workspaceTabs.forEach(button => {
   button.addEventListener("click", () => setWorkspace(button.dataset.workspace));
+});
+
+// The panel's width can change (side panel resized, or the same layout
+// opened wider in a tab) without any workspace switch happening, which
+// would leave the pill sized/positioned for the old width.
+window.addEventListener("resize", () => {
+  updateWorkspaceIndicator(workspaceTabs.find(button => button.classList.contains("active")));
 });
 
 function auditTone(status) {
@@ -314,6 +489,22 @@ async function getSnapshots() {
   const key = storageKey();
   const result = await chrome.storage.local.get(key);
   return result[key] || [];
+}
+
+// Each day's scans live under their own storageKey(), so once the calendar
+// date rolls over, today's key starts out empty even though nothing was
+// actually lost -- it's still sitting under yesterday's (or an earlier) key.
+// Walks backward day by day (bounded so a long-unused install doesn't scan
+// forever) until it finds a non-empty day to show as a fallback.
+async function findMostRecentSnapshots(maxDaysBack = 7) {
+  for (let offset = 1; offset <= maxDaysBack; offset += 1) {
+    const dateKey = shiftedDateKey(-offset);
+    const key = `ehAssistant:${dateKey}`;
+    const result = await chrome.storage.local.get(key);
+    const snapshots = result[key] || [];
+    if (snapshots.length) return { snapshots, dateKey };
+  }
+  return null;
 }
 
 async function saveSnapshot(snapshot) {
@@ -571,8 +762,15 @@ function downloadTextFile(filename, content, mimeType) {
   URL.revokeObjectURL(url);
 }
 
-function render(snapshots) {
+function render(snapshots, dateKey) {
   currentSnapshots = snapshots;
+  // dateKey is only passed by refresh() when it just loaded a specific day's
+  // data; re-renders triggered from within renderInner itself (sort, search,
+  // 待办/汇总 toggle) call render(currentSnapshots) with no dateKey and must
+  // keep showing whichever day was already loaded, not silently jump back to
+  // today.
+  if (dateKey) currentSnapshotDateKey = dateKey;
+  else if (!currentSnapshotDateKey) currentSnapshotDateKey = todayKey();
   try {
     renderInner(snapshots);
   } catch (error) {
@@ -585,7 +783,7 @@ function renderInner(snapshots) {
   summaryBox.innerHTML = "";
 
   if (!snapshots.length) {
-    summaryBox.innerHTML = `<div class="empty">今天还没有扫描记录。</div>`;
+    summaryBox.innerHTML = `<div class="empty">今天还没有扫描记录，最近几天内也没有找到过往记录。</div>`;
     return;
   }
 
@@ -651,7 +849,7 @@ function renderInner(snapshots) {
   const scanTime = latestScanTime(snapshots);
   summaryBox.innerHTML = `
     <div class="card">
-      <div class="card-title"><span>${todayKey()} 汇总</span><span>${snapshots.length} 项</span></div>
+      <div class="card-title"><span>${currentSnapshotDateKey} 汇总</span><span>${snapshots.length} 项</span></div>
       ${scanTime ? `<div class="meta">最后更新 ${scanTime}</div>` : ""}
       ${hasMatrix ? `
         <div class="summary-filter" role="group" aria-label="汇总数据筛选">
@@ -867,7 +1065,18 @@ function escapeHtml(value) {
 }
 
 async function refresh() {
-  render(await getSnapshots());
+  const snapshots = await getSnapshots();
+  if (snapshots.length) {
+    render(snapshots, todayKey());
+    return;
+  }
+  const fallback = await findMostRecentSnapshots();
+  if (fallback) {
+    render(fallback.snapshots, fallback.dateKey);
+    setStatus(`今天还没有巡检记录，正在显示 ${fallback.dateKey} 的最近一次结果，建议重新运行一键巡检。`);
+    return;
+  }
+  render([], todayKey());
 }
 
 async function snapshotTimestamp(key) {
@@ -1062,7 +1271,7 @@ async function runCatalogueScan({ resume } = {}) {
     await chrome.storage.local.set({ [key]: next });
     await clearScanProgress("catalogue");
     setStatus(`自动扫描完成：${rows.length} 个 merchant。`);
-    render(next);
+    render(next, todayKey());
   } catch (error) {
     setStatus(error?.message || "自动扫描失败，已停止且没有刷新 Merchant 筛选。");
   } finally {
@@ -1174,7 +1383,7 @@ async function runOrderScan({ resume } = {}) {
     await chrome.storage.local.set({ [key]: next });
     await clearScanProgress("order");
     setStatus(`Order 自动扫描完成：${rows.length} 个 Merchant。`);
-    render(next);
+    render(next, todayKey());
   } catch (error) {
     setStatus(error?.message || "Order 自动扫描失败，已停止。");
   } finally {
@@ -1321,7 +1530,7 @@ async function runPricingScan({ resume } = {}) {
     await chrome.storage.local.set({ [key]: next });
     await clearScanProgress("pricing");
     setStatus(`Pricing 自动扫描完成：${rows.length} 个 Merchant。`);
-    render(next);
+    render(next, todayKey());
   } catch (error) {
     setStatus(error?.message || "Pricing 自动扫描失败，已停止。");
   } finally {
@@ -1360,6 +1569,313 @@ auditProductButton.addEventListener("click", async () => {
     setAuditStatus(error?.message || "商品辅助审核失败，请重试。");
   } finally {
     auditProductButton.disabled = false;
+  }
+});
+
+function optimizeWordCount(title) {
+  return (String(title || "").trim().match(/\S+/g) || []).length;
+}
+
+function optimizeCategoryLabel(template) {
+  return [template.category1, template.category2, template.category3].filter(Boolean).join(" / ");
+}
+
+function buildOptimizePrompt(product, template) {
+  return [
+    "You are helping a JustFab merchandising operator rewrite a product's storefront Title and Description to match the brand's content spec.",
+    "",
+    "Rules:",
+    "- Title: at most 8 words. Must include the category keyword, the style, and the key selling point. Optional words in parentheses in the formula below may also be used.",
+    "- Description: fill in every structured property listed below that genuinely applies to this product. Skip a property only if it truly does not apply (e.g. a flat sandal has no Heel Height).",
+    "- Only use facts present in the product's existing Title/Description given below. Do not invent materials, measurements, or features that aren't evidenced by the given content.",
+    "- Output ONLY a JSON object of the exact shape {\"title\": string, \"description\": string} -- no markdown, no extra commentary, no code fences.",
+    "",
+    `Category: ${optimizeCategoryLabel(template)}`,
+    `Title formula: ${template.titleFormula.en} (${template.titleFormula.zh})`,
+    `Title example: ${template.titleExample}`,
+    `Description properties to fill when applicable: ${template.descriptionProperties.join(", ")}`,
+    `Description example:\n${template.descriptionExample}`,
+    "",
+    "Product's existing content (source of truth for facts):",
+    `Existing Title: ${product.title || "(empty)"}`,
+    `Existing Description: ${product.description || "(empty)"}`,
+    product.productBrand ? `Brand: ${product.productBrand}` : "",
+    product.vendor ? `Vendor: ${product.vendor}` : ""
+  ].filter(Boolean).join("\n");
+}
+
+function parseOptimizeAiText(text) {
+  const trimmed = String(text || "").trim();
+  const tryParse = candidate => {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed.title === "string" && typeof parsed.description === "string") return parsed;
+    } catch (_error) {
+      return null;
+    }
+    return null;
+  };
+  const direct = tryParse(trimmed);
+  if (direct) return direct;
+  const match = trimmed.match(/\{[\s\S]*\}/);
+  const fromMatch = match ? tryParse(match[0]) : null;
+  if (fromMatch) return fromMatch;
+  return { raw: trimmed };
+}
+
+function callAi(prompt) {
+  return new Promise(resolve => {
+    loadAiConfig().then(aiConfig => {
+      chrome.runtime.sendMessage(
+        { type: "EH_ASSISTANT_CALL_AI", provider: aiConfig?.provider || "anthropic", apiKey: aiConfig?.apiKey, model: aiConfig?.model, prompt },
+        response => {
+          if (chrome.runtime.lastError) resolve({ ok: false, error: chrome.runtime.lastError.message });
+          else resolve(response || { ok: false, error: "未知错误" });
+        }
+      );
+    });
+  });
+}
+
+function renderOptimizeResult(parsed, template) {
+  optimizeResultBox.hidden = false;
+  const categoryLabel = optimizeCategoryLabel(template);
+  if (parsed.raw) {
+    optimizeResultBox.innerHTML = `
+      <div class="optimize-category"><span>匹配品类：${escapeHtml(categoryLabel)}</span></div>
+      <div class="optimize-block">
+        <div class="optimize-block-head"><strong>AI 返回内容（格式异常，请人工核对）</strong></div>
+        <div class="optimize-block-text">${escapeHtml(parsed.raw)}</div>
+      </div>
+    `;
+    return;
+  }
+  const wordCount = optimizeWordCount(parsed.title);
+  optimizeResultBox.innerHTML = `
+    <div class="optimize-category"><span>匹配品类：${escapeHtml(categoryLabel)}</span></div>
+    <div class="optimize-block">
+      <div class="optimize-block-head">
+        <strong>建议 Title</strong>
+        <span class="optimize-word-count ${wordCount > 8 ? "over-limit" : ""}">${wordCount} 个词${wordCount > 8 ? "（超过 8 个词，请人工精简）" : ""}</span>
+      </div>
+      <div class="optimize-block-text">${escapeHtml(parsed.title)}</div>
+      <div class="optimize-translation" hidden></div>
+      <div class="optimize-block-actions">
+        <button class="optimize-copy" type="button" data-copy-target="title">复制</button>
+        <button class="optimize-copy" type="button" data-fill-target="title">一键填入</button>
+        <button class="optimize-copy" type="button" data-translate-target="title">翻译</button>
+      </div>
+    </div>
+    <div class="optimize-block">
+      <div class="optimize-block-head"><strong>建议 Description</strong></div>
+      <div class="optimize-block-text">${escapeHtml(parsed.description)}</div>
+      <div class="optimize-translation" hidden></div>
+      <div class="optimize-block-actions">
+        <button class="optimize-copy" type="button" data-copy-target="description">复制</button>
+        <button class="optimize-copy" type="button" data-fill-target="description">一键填入</button>
+        <button class="optimize-copy" type="button" data-translate-target="description">翻译</button>
+      </div>
+    </div>
+    <div class="audit-note">AI 生成内容仅供参考，请人工核对。「一键填入」只会把内容填进 Editor 输入框（如同手动输入），插件不会点击 EH 自己的保存/提交按钮，填入后仍需你自己确认并保存。</div>
+  `;
+  optimizeResultBox.querySelectorAll("[data-copy-target]").forEach(button => {
+    button.addEventListener("click", async () => {
+      const isTitle = button.dataset.copyTarget === "title";
+      await navigator.clipboard.writeText((isTitle ? parsed.title : parsed.description) || "");
+      setOptimizeStatus(`${isTitle ? "Title" : "Description"} 已复制。`);
+    });
+  });
+  optimizeResultBox.querySelectorAll("[data-fill-target]").forEach(button => {
+    button.addEventListener("click", () => {
+      const isTitle = button.dataset.fillTarget === "title";
+      fillIntoEditor(isTitle ? "title" : "description", isTitle ? parsed.title : parsed.description);
+    });
+  });
+  optimizeResultBox.querySelectorAll("[data-translate-target]").forEach(button => {
+    button.addEventListener("click", () => {
+      const isTitle = button.dataset.translateTarget === "title";
+      translateOptimizeField(isTitle ? "title" : "description", isTitle ? parsed.title : parsed.description, button);
+    });
+  });
+}
+
+function buildTranslatePrompt(text) {
+  return [
+    "Translate the following English e-commerce product copy into natural, concise Chinese so a Chinese-speaking merchandising operator can quickly understand it.",
+    "Output ONLY the Chinese translation -- no quotes, no pinyin, no extra commentary, no markdown.",
+    "",
+    "Text:",
+    text
+  ].join("\n");
+}
+
+// Translation is on demand (a button, not baked into every generation) since
+// it's purely a reading aid for the operator -- the EH page itself always
+// needs the English copy, so most generations may never need this click.
+// Toggling re-shows a translation already fetched instead of calling the AI
+// again.
+async function translateOptimizeField(field, text, button) {
+  const label = field === "title" ? "Title" : "Description";
+  const translationBox = button.closest(".optimize-block").querySelector(".optimize-translation");
+  if (translationBox.dataset.translated === "true") {
+    translationBox.hidden = !translationBox.hidden;
+    button.textContent = translationBox.hidden ? "翻译" : "隐藏翻译";
+    return;
+  }
+  const aiConfig = await loadAiConfig();
+  if (!aiConfig?.apiKey) {
+    setOptimizeStatus("请先在设置里配置 AI 服务商和 API Key。");
+    return;
+  }
+  button.disabled = true;
+  setOptimizeStatus(`正在翻译 ${label}...`);
+  try {
+    const aiResponse = await callAi(buildTranslatePrompt(text));
+    if (!aiResponse.ok) throw new Error(aiResponse.error || "翻译失败");
+    const translated = String(aiResponse.text || "").trim();
+    if (!translated) throw new Error("翻译结果为空");
+    translationBox.textContent = translated;
+    translationBox.hidden = false;
+    translationBox.dataset.translated = "true";
+    button.textContent = "隐藏翻译";
+    setOptimizeStatus(`${label} 翻译完成，仅供参考，不代表最终文案。`);
+  } catch (error) {
+    setOptimizeStatus(error?.message || `${label} 翻译失败，请重试。`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function fillIntoEditor(field, text) {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id || !/^https:\/\/admin\.engagehub\.tsostech\.com\//.test(tab.url || "")) {
+    setOptimizeStatus("请先打开运营端 Catalogue 商品详情页再填入。");
+    return;
+  }
+  const label = field === "title" ? "Title" : "Description";
+  const messageType = field === "title" ? "EH_ASSISTANT_FILL_EDITOR_TITLE" : "EH_ASSISTANT_FILL_EDITOR_DESCRIPTION";
+  setOptimizeStatus(`正在填入 ${label}...`);
+  try {
+    const response = await askContentWithInjection(tab.id, { type: messageType, text: text || "" });
+    if (!response) throw new Error(`无法连接当前 EH 页面脚本，请确认扩展已更新到 v${chrome.runtime.getManifest().version} 后重试。`);
+    if (!response.ok) throw new Error(response.error || `${label} 填入失败`);
+    if (!response.result?.filled) {
+      throw new Error(response.result?.reason || `${label} 填入后校验不一致，请改用「复制」按钮手动粘贴。`);
+    }
+    setOptimizeStatus(`${label} 已填入 Editor 输入框，请确认内容后自己点击 EH 的保存按钮——插件不会自动保存或提交。`);
+  } catch (error) {
+    setOptimizeStatus(error?.message || `${label} 填入失败，请改用「复制」按钮手动粘贴。`);
+  }
+}
+
+async function runOptimizeGeneration(product, template) {
+  optimizeProductButton.disabled = true;
+  // A reasoning-model call can take 30-90s with nothing to show for it; a
+  // static message left the user unsure whether it had frozen (this is the
+  // exact scenario that prompted "为什么这么慢" -- a ticking elapsed time is
+  // cheap, concrete proof the extension is still waiting, not stuck.
+  const baseMessage = "正在调用 AI 生成 Title/Description 建议...如果服务商用的是推理类模型，这一步可能要等 30-90 秒，属于正常现象，请不要重复点击。";
+  const startedAt = Date.now();
+  const tickStatus = () => setOptimizeStatus(`${baseMessage}（已等待 ${Math.round((Date.now() - startedAt) / 1000)} 秒）`);
+  tickStatus();
+  const tickTimer = setInterval(tickStatus, 1000);
+  try {
+    const prompt = buildOptimizePrompt(product, template);
+    const aiResponse = await callAi(prompt);
+    if (!aiResponse.ok) throw new Error(aiResponse.error || "AI 调用失败。");
+    const parsed = parseOptimizeAiText(aiResponse.text);
+    renderOptimizeResult(parsed, template);
+    setOptimizeStatus(parsed.raw
+      ? "AI 返回内容格式异常，已原样展示，请人工核对。"
+      : "AI 建议已生成，仅供参考，请人工核对后手动复制到 EH 页面。");
+  } catch (error) {
+    setOptimizeStatus(error?.message || "生成建议失败，请重试。");
+  } finally {
+    clearInterval(tickTimer);
+    optimizeProductButton.disabled = false;
+  }
+}
+
+function renderOptimizeCategoryPicker(product) {
+  const templates = window.EHAssistantOptimizeTemplates.templates;
+  optimizeResultBox.hidden = false;
+  const detectedNote = product.categoryPath ? `（读取到：${escapeHtml(product.categoryPath)}）` : "";
+  optimizeResultBox.innerHTML = `
+    <div class="optimize-category">
+      <span>未能自动识别商品品类${detectedNote}，请手动选择：</span>
+      <select id="optimizeCategorySelect">
+        <option value="">请选择品类...</option>
+        ${templates.map((template, index) => `<option value="${index}">${escapeHtml(optimizeCategoryLabel(template))}</option>`).join("")}
+      </select>
+    </div>
+    <button id="optimizeCategoryConfirm" class="primary compact-button" type="button">生成建议</button>
+  `;
+  document.getElementById("optimizeCategoryConfirm").addEventListener("click", () => {
+    const select = document.getElementById("optimizeCategorySelect");
+    const index = Number(select.value);
+    const template = templates[index];
+    if (!select.value || !template) {
+      setOptimizeStatus("请先选择品类。");
+      return;
+    }
+    runOptimizeGeneration(product, template);
+  });
+}
+
+aiSettingsToggle.addEventListener("click", async () => {
+  const willShow = aiSettingsPanel.hidden;
+  aiSettingsPanel.hidden = !willShow;
+  aiSettingsToggle.setAttribute("aria-expanded", String(willShow));
+  aiSettingsToggle.title = willShow ? "收起 AI 设置" : "展开 AI 设置";
+  if (willShow) {
+    const config = await loadAiConfig();
+    const provider = validAiProviders.has(config?.provider) ? config.provider : "anthropic";
+    aiProviderSelect.value = provider;
+    aiApiKeyInput.value = config?.apiKey || "";
+    populateModelOptions(provider, config?.model || "");
+    // Blank hint: what's shown in the fields already matches what's saved,
+    // so there's nothing pending to call out yet.
+    showAiSettingsHint("", "muted");
+  }
+});
+
+optimizeProductButton.addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id || !/^https:\/\/admin\.engagehub\.tsostech\.com\//.test(tab.url || "")) {
+    setOptimizeStatus("请先打开运营端 Catalogue 商品详情页。");
+    return;
+  }
+  const aiConfig = await loadAiConfig();
+  if (!aiConfig?.apiKey) {
+    aiSettingsPanel.hidden = false;
+    setOptimizeStatus("请先在设置里配置 AI 服务商和 API Key。");
+    return;
+  }
+
+  optimizeProductButton.disabled = true;
+  optimizeResultBox.hidden = true;
+  setOptimizeStatus("正在读取当前商品信息...");
+  try {
+    const response = await askContentWithInjection(tab.id, { type: "EH_ASSISTANT_GATHER_OPTIMIZE_DATA" });
+    if (!response) throw new Error(`无法连接当前 EH 页面脚本，请确认扩展已更新到 v${chrome.runtime.getManifest().version} 后重试。`);
+    if (!response.ok) throw new Error(`读取商品信息失败：${response.error || "未知错误"}`);
+    if (!response.product) throw new Error("页面脚本已连接，但当前网址不是运营端 Catalogue 商品详情路径。");
+    const product = response.product;
+    // Prefer the page's own category breadcrumb; if that can't be read or
+    // doesn't match a known template, fall back to guessing from the
+    // product's existing Title/Description before giving up to a manual pick.
+    const template = window.EHAssistantOptimizeTemplates.match(product.categoryPath)
+      || window.EHAssistantOptimizeTemplates.matchByText(product.title, product.description);
+    if (template) {
+      await runOptimizeGeneration(product, template);
+    } else {
+      renderOptimizeCategoryPicker(product);
+      setOptimizeStatus("未能自动识别品类，请手动选择后继续。");
+    }
+  } catch (error) {
+    setOptimizeStatus(error?.message || "读取商品信息失败，请重试。");
+  } finally {
+    optimizeProductButton.disabled = false;
   }
 });
 

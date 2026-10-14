@@ -12,6 +12,7 @@
 
   const I = window.__ehAssistantInternal;
   const C = window.EHAssistantBackgroundClassifier;
+  const T = window.EHAssistantOptimizeTemplates;
 
   if (!I) {
     document.getElementById("output").textContent =
@@ -21,6 +22,11 @@
   if (!C) {
     document.getElementById("output").textContent =
       "shared/background-classifier.js 没有正确加载，window.EHAssistantBackgroundClassifier 不存在。";
+    return;
+  }
+  if (!T) {
+    document.getElementById("output").textContent =
+      "shared/optimize-templates.js 没有正确加载，window.EHAssistantOptimizeTemplates 不存在。";
     return;
   }
 
@@ -183,6 +189,55 @@
     "classifySwatchLikelihood: an empty pixel buffer reports pixel_unavailable",
     I.classifySwatchLikelihood(new Uint8ClampedArray(0), 0, 0).code,
     "pixel_unavailable"
+  );
+
+  // --- EHAssistantOptimizeTemplates.match (shared/optimize-templates.js) ---
+  assertEqual(
+    "match: exact leaf segment match returns the right template",
+    T.match("Fashion>>Clothing>>Intimates")?.category2,
+    "Intimates"
+  );
+  assertEqual(
+    "match: case-insensitive and whitespace-tolerant",
+    T.match("Fashion>> Clothing >>  INTIMATES  ")?.category2,
+    "Intimates"
+  );
+  assertEqual(
+    "match: three-level breadcrumb matches on the deepest segment (category3)",
+    T.match("Fashion>>Bags & Accessories>>Accessories>>Belts")?.category3,
+    "Belts"
+  );
+  assertEqual(
+    "match: no matching segment returns null",
+    T.match("Fashion>>Home>>Candles"),
+    null
+  );
+  assertEqual(
+    "match: empty/missing category path returns null",
+    T.match(""),
+    null
+  );
+
+  // --- EHAssistantOptimizeTemplates.matchByText (fallback when the category breadcrumb can't be read/matched) ---
+  assertEqual(
+    "matchByText: title ending in a clear category keyword matches it",
+    T.matchByText("Sophia Pointed Toe Stiletto Satin Pumps", "")?.category2,
+    "Pumps"
+  );
+  assertEqual(
+    "matchByText: trailing-word weighting picks the real category over an unrelated style word earlier in the title",
+    T.matchByText("Sport Fleece Relaxed Pullover Hoodie", "")?.category2,
+    "Hoodies"
+  );
+  assertEqual(
+    "matchByText: a title with no recognizable category keyword returns null",
+    T.matchByText("Blue Ceramic Coffee Mug", "A charming mug for your morning coffee."),
+    null
+  );
+  assertEqual(
+    "matchByText: multi-word leaf category name matches on a single strong keyword",
+    T.matchByText("Cozy Faux Fur Winter Ear Warmers", "")?.category3,
+    "Ear Warmer"
   );
 
   const passCount = results.filter(result => result.pass).length;

@@ -34,6 +34,26 @@
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  // Media/Color-Swatch checks used to await one image fetch+decode+pixel-scan
+  // at a time, so a product with 20-30 images paid 20-30x a single image's
+  // round trip in pure wall-clock time. Each image's network fetch happens in
+  // the background service worker regardless, so running several in flight
+  // at once overlaps that network wait instead of serializing it -- the cap
+  // just keeps a large Media grid from opening dozens of requests at once.
+  async function mapWithConcurrency(items, limit, fn) {
+    const results = new Array(items.length);
+    let nextIndex = 0;
+    async function worker() {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await fn(items[index], index);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+    return results;
+  }
+
   function isVisible(element) {
     if (!element) return false;
     const style = window.getComputedStyle(element);
@@ -464,24 +484,104 @@
     return null;
   }
 
-  function readEditorTitleInputValue() {
-    const container = findEditorContainer();
-    if (!container) return "";
-    const titleLabel = [...container.querySelectorAll("div,span,p,label")]
+  // Finds the label element then picks the nearest matching field below it
+  // within `container` -- the same proximity heuristic used for both the
+  // Editor Title <input> and the Editor Description contenteditable box,
+  // since Provided-by's same-named labels sit at a similar vertical offset
+  // in the next column over and a pure position check without this label
+  // anchor could grab the wrong field.
+  function findFieldNearLabel(container, labelText, fieldSelector) {
+    const label = [...container.querySelectorAll("div,span,p,label")]
       .filter(element => element.children.length === 0)
       .filter(isVisible)
-      .find(element => clean(element.textContent) === "Title");
-    if (!titleLabel) return "";
-    const labelRect = titleLabel.getBoundingClientRect();
-    const candidates = [...container.querySelectorAll("input")]
-      .filter(isVisible)
-      .filter(element => ["text", ""].includes((element.getAttribute("type") || "").toLowerCase()));
-    const input = candidates.sort((a, b) => {
+      .find(element => clean(element.textContent) === labelText);
+    if (!label) return null;
+    const labelRect = label.getBoundingClientRect();
+    const candidates = [...container.querySelectorAll(fieldSelector)].filter(isVisible);
+    return candidates.sort((a, b) => {
       const distanceA = Math.abs(a.getBoundingClientRect().top - labelRect.bottom);
       const distanceB = Math.abs(b.getBoundingClientRect().top - labelRect.bottom);
       return distanceA - distanceB;
-    })[0];
+    })[0] || null;
+  }
+
+  function findEditorTitleInputElement() {
+    const container = findEditorContainer();
+    if (!container) return null;
+    return findFieldNearLabel(container, "Title", 'input[type="text"],input:not([type])');
+  }
+
+  function readEditorTitleInputValue() {
+    const input = findEditorTitleInputElement();
     return input ? clean(input.value) : "";
+  }
+
+  // The Description field can be a contenteditable rich-text box (the common
+  // case, per the comment above) or occasionally a plain <textarea> --
+  // support both since this hasn't been verified against every real product
+  // page layout.
+  function findEditorDescriptionElement() {
+    const container = findEditorContainer();
+    if (!container) return null;
+    return findFieldNearLabel(container, "Description", '[contenteditable="true"],textarea');
+  }
+
+  // Setting `.value` directly on a React-controlled <input> updates the DOM
+  // but not React's own state, so the field can silently snap back on the
+  // next render. Going through the native property setter and then firing
+  // "input" (which is what React's onChange actually listens for) makes the
+  // framework see the change as if the user had typed it.
+  function setNativeInputValue(input, value) {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function setNativeTextareaValue(textarea, value) {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
+    setter.call(textarea, value);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    textarea.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  // Fills the Editor's Title/Description field as if the user had typed it --
+  // never touches any Save/Submit control on the page. The caller (popup.js)
+  // still tells the operator to manually confirm and save on the EH side.
+  function fillEditorTitle(text) {
+    const input = findEditorTitleInputElement();
+    if (!input) return { filled: false, reason: "未找到 Editor 的 Title 输入框，请改用复制按钮手动粘贴。" };
+    input.focus();
+    setNativeInputValue(input, text);
+    input.blur();
+    return { filled: clean(input.value) === clean(text) };
+  }
+
+  function fillEditorDescription(text) {
+    const element = findEditorDescriptionElement();
+    if (!element) return { filled: false, reason: "未找到 Editor 的 Description 输入框，请改用复制按钮手动粘贴。" };
+    if (element.tagName === "TEXTAREA") {
+      element.focus();
+      setNativeTextareaValue(element, text);
+      element.blur();
+      return { filled: clean(element.value) === clean(text) };
+    }
+    // Rich-text editors (Quill/Slate/Draft-style) keep their own internal
+    // document model, so overwriting textContent/innerHTML directly can
+    // silently desync from it. Selecting the existing content and running
+    // the browser's own insertText command mimics a real paste, which is
+    // what most of these editors' own input listeners expect.
+    const beforeText = clean(element.textContent);
+    element.focus();
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const inserted = document.execCommand("insertText", false, text);
+    element.blur();
+    const afterText = clean(element.textContent);
+    return { filled: inserted && afterText !== beforeText && afterText.startsWith(clean(text).slice(0, 20)) };
   }
 
   function readProvidedContent() {
@@ -897,15 +997,12 @@
       candidates = mediaColumnCandidates();
     }
     if (!candidates.length) return { status: "manual", detail: "未读取到 Media 列图片；Color Swatch Image 已排除。" };
-    const results = [];
-    for (const candidate of candidates) {
-      results.push({
-        ...await imageBackgroundResult(candidate),
-        color: candidate.color,
-        imageIndex: candidate.imageIndex,
-        rect: candidate.rect
-      });
-    }
+    const results = await mapWithConcurrency(candidates, 5, async candidate => ({
+      ...await imageBackgroundResult(candidate),
+      color: candidate.color,
+      imageIndex: candidate.imageIndex,
+      rect: candidate.rect
+    }));
     return {
       ...summarizeMediaResults(results),
       imageResults: results,
@@ -978,6 +1075,17 @@
     }
   }
 
+  // One line per color instead of squeezing every color's finding into a
+  // single semicolon-joined sentence, which got hard to scan once more than
+  // two or three colors had something to report. Caps the list so a product
+  // with a large color count still can't blow up the check into a giant
+  // card -- the trailing line says how many more weren't listed.
+  function colorIssueLines(items, maxLines) {
+    const shown = items.slice(0, maxLines).map(item => `${item.color}：${item.detail}`);
+    if (items.length > maxLines) shown.push(`……另有 ${items.length - maxLines} 个色号，请展开 Variant 表格逐一确认`);
+    return shown.join("\n");
+  }
+
   async function colorSwatchCheck() {
     const status = colorSwatchColumnStatus();
     if (!status.found) return { status: "manual", detail: "未找到 Color Swatch Image 列，请人工确认。" };
@@ -985,29 +1093,30 @@
 
     const missingRows = status.rows.filter(row => !row.candidate);
     const presentRows = status.rows.filter(row => row.candidate);
-    const results = [];
-    for (const row of presentRows) {
-      results.push({ color: row.color, ...await classifySwatchImageResult(row.candidate) });
-    }
+    const results = await mapWithConcurrency(presentRows, 5, async row => ({
+      color: row.color,
+      ...await classifySwatchImageResult(row.candidate)
+    }));
     const attention = results.filter(item => item.status === "attention");
     const manual = results.filter(item => item.status === "manual");
 
-    const issues = [];
-    if (missingRows.length) {
-      const sample = missingRows.slice(0, 6).map(row => row.color).join("、");
-      issues.push(`${missingRows.length} 个色号缺少 Color Swatch Image 图片链接：${sample}${missingRows.length > 6 ? "等" : ""}`);
-    }
-    if (attention.length) {
-      const sample = attention.slice(0, 6).map(item => `${item.color}：${item.detail}`).join("；");
-      issues.push(`${attention.length} 个色号的图片有问题（加载失败或疑似产品图）：${sample}`);
-    }
+    const issues = [
+      ...missingRows.map(row => ({ color: row.color, detail: "缺少 Color Swatch Image 图片链接" })),
+      ...attention
+    ];
     if (issues.length) {
-      const manualNote = manual.length ? `另有 ${manual.length} 个色号无法自动判断，需人工确认（${summarizeManualReasons(manual)}）。` : "";
-      return { status: "attention", detail: `${issues.join("；")}。${manualNote}` };
+      const summary = [
+        missingRows.length ? `${missingRows.length} 个色号缺少图片链接` : "",
+        attention.length ? `${attention.length} 个色号的图片有问题（加载失败或疑似产品图）` : ""
+      ].filter(Boolean).join("，");
+      const manualNote = manual.length ? `\n另有 ${manual.length} 个色号无法自动判断，需人工确认（${summarizeManualReasons(manual)}）。` : "";
+      return { status: "attention", detail: `${summary}：\n${colorIssueLines(issues, 10)}${manualNote}` };
     }
     if (manual.length) {
-      const sample = manual.slice(0, 5).map(item => item.color).join("、");
-      return { status: "manual", detail: `${status.rows.length} 个色号中有 ${manual.length} 个无法自动判断是否为色块图，需人工确认。原因：${summarizeManualReasons(manual)}。涉及：${sample}${manual.length > 5 ? "等" : ""}。` };
+      return {
+        status: "manual",
+        detail: `${status.rows.length} 个色号中有 ${manual.length} 个无法自动判断是否为色块图，需人工确认。原因：${summarizeManualReasons(manual)}。\n${colorIssueLines(manual, 8)}`
+      };
     }
     return { status: "pass", detail: `共 ${status.rows.length} 个色号，Color Swatch Image 均存在且识别为色块图。` };
   }
@@ -1045,6 +1154,28 @@
     checks.push({ label: "Color Swatch", ...await colorSwatchCheck() });
     onStage("生成审核结果");
     return { product, checks, scannedAt: new Date().toISOString() };
+  }
+
+  // Gathers just what the "一键优化" AI content-generation feature needs.
+  // Deliberately reuses the same title/description resolution as
+  // auditCurrentProduct (Editor overrides Provided-by) instead of adding a
+  // second parsing path. Does not read Product Attribute values -- the AI
+  // prompt is instructed to only use the product's existing title/description
+  // as its factual source, not to invent specs from an unverified table scan.
+  function gatherOptimizeData() {
+    const bodyText = clean(document.body.innerText);
+    const url = new URL(location.href);
+    const isDetailRoute = url.hostname === "admin.engagehub.tsostech.com" && /^\/catalogue\/detail\//i.test(url.pathname);
+    if (!isDetailRoute && !(/Basic Info/i.test(bodyText) && /Provided by/i.test(bodyText))) return null;
+    const product = readProvidedContent();
+    product.spuId = readBasicValue("SPU ID");
+    product.productBrand = readBasicValue("Product Brand");
+    product.vendor = readBasicValue("Vendor");
+    // "Mapping Categories" is a group heading, not itself a label -- the
+    // actual label/value pair rendered underneath it is "Brand Category" /
+    // "Fashion>>Clothing>>...", confirmed on a real product detail page.
+    product.categoryPath = readBasicValue("Brand Category");
+    return product;
   }
 
   function extractSnapshot() {
@@ -1101,6 +1232,30 @@
         .then(result => sendResponse({ ok: true, result }))
         .catch(error => sendResponse({ ok: false, stage, error: error?.message || String(error) }));
       return true;
+    }
+    if (message?.type === "EH_ASSISTANT_GATHER_OPTIMIZE_DATA") {
+      try {
+        sendResponse({ ok: true, product: gatherOptimizeData() });
+      } catch (error) {
+        sendResponse({ ok: false, error: error?.message || String(error) });
+      }
+      return;
+    }
+    if (message?.type === "EH_ASSISTANT_FILL_EDITOR_TITLE") {
+      try {
+        sendResponse({ ok: true, result: fillEditorTitle(message.text || "") });
+      } catch (error) {
+        sendResponse({ ok: false, error: error?.message || String(error) });
+      }
+      return;
+    }
+    if (message?.type === "EH_ASSISTANT_FILL_EDITOR_DESCRIPTION") {
+      try {
+        sendResponse({ ok: true, result: fillEditorDescription(message.text || "") });
+      } catch (error) {
+        sendResponse({ ok: false, error: error?.message || String(error) });
+      }
+      return;
     }
     if (message?.type === "EH_ASSISTANT_CLICK_CATALOGUE_TAB") {
       try {
