@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>EH Assistant 架构</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { background: #f3f5f9; font-family: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", sans-serif; color: #18212f; }
+  .page { width: 1140px; padding: 24px 20px 28px; }
+  .lead { font-size: 17px; font-weight: 700; margin: 0 0 16px 4px; }
+  .canvas { position: relative; width: 1100px; height: 1010px; background: #fff; border: 1px solid #c9d1de; border-radius: 18px; }
+  .abs { position: absolute; }
+  .dash { border: 1.5px dashed #c9d1de; border-radius: 14px; background: #fff; }
+  .box-title { font-size: 15px; font-weight: 700; }
+  .box-sub { font-size: 11.5px; color: #7b8597; margin-top: 3px; }
+  .pill { background: #f3f5f9; border: 1px solid #c9d1de; border-radius: 9px; font-size: 13px; text-align: center; padding: 8px 6px; }
+  .pill small { display: block; font-size: 10.5px; color: #7b8597; margin-top: 2px; }
+  .stack { display: grid; gap: 9px; margin-top: 14px; }
+  .core { background: #121a2b; border-radius: 16px; color: #e8edf7; padding: 16px 18px; box-shadow: 0 0 0 2px #1f4fd6; }
+  .core h2 { font-size: 21px; font-weight: 800; letter-spacing: .5px; }
+  .core .tagline { position: absolute; top: 20px; right: 18px; font-size: 11px; color: #9aa7bf; }
+  .core .dispatch { margin-top: 12px; background: #1c2740; border-radius: 10px; text-align: center; padding: 10px; }
+  .core .dispatch b { font-size: 14.5px; }
+  .core .dispatch div { font-size: 11px; color: #9aa7bf; margin-top: 4px; }
+  .rule { display: flex; align-items: center; gap: 12px; margin-top: 9px; background: #1c2740; border-radius: 10px; padding: 8px 10px; }
+  .rule .tag { flex: 0 0 auto; background: #f5b942; color: #121a2b; border-radius: 6px; font-size: 12px; font-weight: 700; padding: 4px 10px; }
+  .rule span:last-child { font-size: 12px; color: #e8edf7; }
+  .num { position: absolute; width: 22px; height: 22px; border-radius: 50%; background: #1f4fd6; color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  .num.ok { background: #1f8a4c; }
+  .lbl { position: absolute; font-size: 12.5px; font-weight: 700; color: #1f4fd6; white-space: nowrap; }
+  .lbl.ok { color: #1f8a4c; }
+  .you { border: 2px solid #1f8a4c; background: #e7f5ec; border-radius: 16px; text-align: center; padding-top: 18px; }
+  .you b { font-size: 21px; color: #1f8a4c; }
+  .you div { font-size: 12.5px; font-weight: 700; margin-top: 6px; }
+  .loop { border: 1.5px solid #1f4fd6; border-radius: 999px; background: #e6edfd; color: #1f4fd6; font-size: 12px; font-weight: 700; padding: 6px 16px; white-space: nowrap; }
+  .pipe { display: flex; align-items: center; padding: 0 18px; }
+  .pipe .head { width: 170px; flex: 0 0 auto; }
+  .pipe .chain { display: flex; align-items: center; gap: 0; flex: 1; }
+  .pipe .chain i { flex: 0 0 18px; text-align: center; color: #7b8597; font-style: normal; }
+  .step { flex: 1; min-width: 0; background: #f3f5f9; border: 1px solid #c9d1de; border-radius: 10px; padding: 7px 9px; display: flex; flex-direction: column; gap: 3px; }
+  .step::before { content: "只读"; align-self: flex-start; padding: 0 7px; border-radius: 99px; font-size: 10.5px; font-weight: 700; line-height: 17px; color: #7b8597; background: #fff; border: 1px solid #c9d1de; }
+  .step b { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+  .step .n { font-family: Consolas, monospace; font-size: 11px; color: #1f4fd6; margin-right: 4px; }
+  .step.write { border: 2px solid #1f4fd6; background: #e6edfd; }
+  .step.write::before { content: "发给 AI"; color: #fff; background: #1f4fd6; border-color: #1f4fd6; }
+  .step.human { border: 2px solid #1f8a4c; background: #e7f5ec; }
+  .step.human::before { content: "需你确认"; color: #fff; background: #1f8a4c; border-color: #1f8a4c; }
+  .step.human .n { color: #1f8a4c; }
+  .legend { display: flex; align-items: center; gap: 18px; margin: 14px 0 0 4px; font-size: 13px; color: #4a5568; }
+  .legend > b { color: #18212f; }
+  .legend span { display: inline-flex; align-items: center; gap: 8px; }
+  .sw { padding: 0 8px; border-radius: 99px; font-size: 11px; font-weight: 700; font-style: normal; line-height: 18px; color: #7b8597; background: #f3f5f9; border: 1px solid #c9d1de; }
+  .sw.write { color: #fff; background: #1f4fd6; border-color: #1f4fd6; }
+  .sw.human { color: #fff; background: #1f8a4c; border-color: #1f8a4c; }
+  svg.arrows { position: absolute; inset: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+<div class="page">
+  <p class="lead">EH Assistant：在 Chrome 侧边栏一键完成待办巡检、商品审核和文案优化；只读，不替你点保存。</p>
+
+  <div class="canvas">
+    <svg class="arrows" width="1100" height="1010" viewBox="0 0 1100 1010">
+      <defs>
+        <marker id="ah" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#1f4fd6"/></marker>
+        <marker id="ahs" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto"><path d="M8,0 L0,4 L8,8 z" fill="#1f4fd6"/></marker>
+        <marker id="ahg" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#1f8a4c"/></marker>
+        <marker id="ahgs" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto"><path d="M8,0 L0,4 L8,8 z" fill="#1f8a4c"/></marker>
+      </defs>
+      <!-- top loop -->
+      <path d="M520 128 V58 H555" fill="none" stroke="#1f4fd6" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+      <path d="M896 58 H945 V132" fill="none" stroke="#1f4fd6" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+      <!-- 1 trigger -->
+      <path d="M250 300 H296" stroke="#1f4fd6" stroke-width="2" marker-end="url(#ah)"/>
+      <!-- 2 dispatch -->
+      <path d="M752 262 H806" stroke="#1f4fd6" stroke-width="2" marker-end="url(#ah)"/>
+      <!-- 3 return -->
+      <path d="M806 338 H756" stroke="#1f4fd6" stroke-width="2" marker-end="url(#ah)"/>
+      <!-- 4 render -->
+      <path d="M600 472 V530" stroke="#1f4fd6" stroke-width="2" marker-end="url(#ah)"/>
+      <!-- 5 you -> core -->
+      <path d="M318 548 V505 H440 V476" fill="none" stroke="#1f4fd6" stroke-width="2" marker-end="url(#ah)"/>
+      <!-- you <-> results -->
+      <path d="M412 590 H452" stroke="#1f4fd6" stroke-width="2" marker-start="url(#ahs)" marker-end="url(#ah)"/>
+    </svg>
+
+    <div class="abs loop" style="left:560px; top:44px;">图片检查闭环：后台读图 · 本地像素分析 · 5 张并发</div>
+
+    <!-- left: entry -->
+    <div class="abs dash" style="left:24px; top:132px; width:226px; height:342px; padding:16px;">
+      <div class="box-title">用户入口</div>
+      <div class="box-sub">你在侧边栏点什么</div>
+      <div class="stack">
+        <div class="pill">一键巡检</div>
+        <div class="pill">专项巡检<small>Catalogue · Pricing · Order</small></div>
+        <div class="pill">审核当前商品</div>
+        <div class="pill">一键优化<small>AI 生成 Title / Description</small></div>
+        <div class="pill" style="color:#8a8178">• • •</div>
+      </div>
+    </div>
+
+    <!-- core -->
+    <div class="abs core" style="left:300px; top:128px; width:452px; height:344px;">
+      <h2>侧边栏内核 popup.js</h2>
+      <div class="tagline">只读 · 本地存储 · 可追溯</div>
+      <div class="dispatch"><b>按工作区分派任务</b><div>待办巡检 · 商品审核 · 一键优化，三个 Tab 互不干扰</div></div>
+      <div class="rule"><span class="tag">自动注入</span><span>EH 页面脚本没加载时自动注入，不用手动刷新</span></div>
+      <div class="rule"><span class="tag">断点续扫</span><span>每个 Merchant 存进度，中途停了能接着扫</span></div>
+      <div class="rule"><span class="tag">按天存档</span><span>结果按日期存本地，今天没扫回退最近 7 天</span></div>
+      <div class="rule"><span class="tag">只读边界</span><span>绝不点 Approve / Save / Submit，保存由你决定</span></div>
+    </div>
+
+    <div class="num" style="left:262px; top:276px;">1</div>
+    <div class="lbl" style="left:256px; top:310px;">触发</div>
+    <div class="num" style="left:768px; top:236px;">2</div>
+    <div class="lbl" style="left:764px; top:272px;">派活</div>
+    <div class="num" style="left:768px; top:348px;">3</div>
+    <div class="lbl" style="left:752px; top:376px;">回传结果</div>
+
+    <!-- right: executors -->
+    <div class="abs dash" style="left:808px; top:132px; width:270px; height:342px; padding:16px;">
+      <div class="box-title">执行层</div>
+      <div class="box-sub">真正干活的脚本和服务</div>
+      <div class="stack">
+        <div class="pill">content.js<small>读 EH 页面、切 Tab 和 Merchant</small></div>
+        <div class="pill">background.js<small>后台读图片、调 AI，域名白名单</small></div>
+        <div class="pill">shared/<small>背景色算法 · 30 个品类模板</small></div>
+        <div class="pill">AI 服务商（4 选 1）<small>Anthropic · OpenAI · DeepSeek · 公司网关</small></div>
+      </div>
+    </div>
+
+    <div class="num" style="left:610px; top:490px;">4</div>
+    <div class="lbl" style="left:638px; top:493px;">渲染到侧边栏</div>
+
+    <!-- you -->
+    <div class="abs you" style="left:224px; top:548px; width:188px; height:92px;"><b>你</b><div>看结果，自己拍板</div></div>
+    <div class="num" style="left:330px; top:512px;">5</div>
+    <div class="lbl" style="left:206px; top:514px;">复核后自己保存</div>
+
+    <!-- results -->
+    <div class="abs dash" style="left:452px; top:532px; width:626px; height:112px; padding:14px 16px;">
+      <div><span class="box-title">结果展示</span><span class="box-sub" style="margin-left:8px">在侧边栏里给你看</span></div>
+      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-top:12px;">
+        <div class="pill">待办矩阵<small>较昨日趋势</small></div>
+        <div class="pill">审核清单<small>通过 · 关注 · 人工</small></div>
+        <div class="pill">AI 建议<small>复制 · 填入 · 翻译</small></div>
+        <div class="pill">日报<small>复制 · 导出 CSV</small></div>
+      </div>
+    </div>
+
+    <!-- pipelines -->
+    <div class="abs dash pipe" style="left:24px; top:670px; width:1054px; height:96px;">
+      <div class="head"><div class="box-title">待办巡检流水线</div><div class="box-sub">Catalogue / Pricing / Order</div></div>
+      <div class="chain">
+        <div class="step"><b><span class="n">1</span>读 Merchant 列表</b></div><i>→</i>
+        <div class="step"><b><span class="n">2</span>逐个切换 Merchant</b></div><i>→</i>
+        <div class="step"><b><span class="n">3</span>读 3 个待办 Tab 总数</b></div><i>→</i>
+        <div class="step"><b><span class="n">4</span>存当天快照</b></div><i>→</i>
+        <div class="step human"><b><span class="n">5</span>看矩阵 + 较昨日</b></div>
+      </div>
+    </div>
+
+    <div class="abs dash pipe" style="left:24px; top:782px; width:1054px; height:96px;">
+      <div class="head"><div class="box-title">商品审核流水线</div><div class="box-sub">纯本地规则，不调 AI</div></div>
+      <div class="chain">
+        <div class="step"><b><span class="n">1</span>识别详情页</b></div><i>→</i>
+        <div class="step"><b><span class="n">2</span>标题 / 描述</b></div><i>→</i>
+        <div class="step"><b><span class="n">3</span>价格一致性</b></div><i>→</i>
+        <div class="step"><b><span class="n">4</span>Media 灰底</b></div><i>→</i>
+        <div class="step"><b><span class="n">5</span>Color Swatch</b></div><i>→</i>
+        <div class="step human"><b><span class="n">6</span>你决定是否通过</b></div>
+      </div>
+    </div>
+
+    <div class="abs dash pipe" style="left:24px; top:894px; width:1054px; height:96px;">
+      <div class="head"><div class="box-title">一键优化流水线</div><div class="box-sub">只发标题和描述，不发图片</div></div>
+      <div class="chain">
+        <div class="step"><b><span class="n">1</span>读 Title / Description</b></div><i>→</i>
+        <div class="step"><b><span class="n">2</span>识别品类</b></div><i>→</i>
+        <div class="step"><b><span class="n">3</span>套品类规范拼 Prompt</b></div><i>→</i>
+        <div class="step write"><b><span class="n">4</span>调 AI 生成</b></div><i>→</i>
+        <div class="step human"><b><span class="n">5</span>填入后由你保存</b></div>
+      </div>
+    </div>
+  </div>
+  <div class="legend">
+    <b>每一步的类型</b>
+    <span><i class="sw">只读</i>只读页面，不改任何数据</span>
+    <span><i class="sw write">发给 AI</i>标题和描述发给你选的 AI 服务商</span>
+    <span><i class="sw human">需你确认</i>插件停在这里，由你判断和保存</span>
+  </div>
+</div>
+</body>
+</html>
