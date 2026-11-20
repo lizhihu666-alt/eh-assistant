@@ -208,7 +208,7 @@ p {
 }
 
 .author-credit {
-  color: var(--text-faint);
+  color: var(--text-body);
   font-size: 11px;
 }
 
