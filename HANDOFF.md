@@ -8,7 +8,7 @@
 
 `C:\Users\leohu\Documents\Codex\eh-assistant-mvp`
 
-当前版本：`v0.30.2`
+当前版本：`v0.35.0`（v0.35.0 新增每日定时巡检，见 README「每日定时巡检」）
 
 版本号只需要维护 `manifest.json` 一处：`popup.html`/`popup.js` 会在加载时通过 `chrome.runtime.getManifest().version` 动态读取并显示，不再在多个文件里手写版本号字符串。
 

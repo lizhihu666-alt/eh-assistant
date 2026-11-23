@@ -2,9 +2,17 @@
   "manifest_version": 3,
   "name": "EH Assistant",
   "description": "Read-only daily todo summary for Engage Hub.",
-  "version": "0.34.2",
+  "version": "0.35.0",
   "minimum_chrome_version": "114",
-  "permissions": ["activeTab", "tabs", "storage", "clipboardWrite", "sidePanel", "scripting"],
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "storage",
+    "clipboardWrite",
+    "sidePanel",
+    "scripting",
+    "alarms"
+  ],
   "host_permissions": [
     "https://admin.engagehub.tsostech.com/*",
     "https://engagehub.tsostech.com/*",
@@ -38,11 +46,19 @@
         "https://admin.engagehub.tsostech.com/*",
         "https://engagehub.tsostech.com/*"
       ],
-      "js": ["shared/background-classifier.js", "content.js"],
+      "js": [
+        "shared/background-classifier.js",
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "background": {
     "service_worker": "background.js"
-  }
+  },
+  "optional_host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "options_page": "options.html"
 }

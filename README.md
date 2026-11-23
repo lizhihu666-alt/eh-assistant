@@ -22,6 +22,13 @@
 - EH 图片通过限定域名 `img.engagehub.tsostech.com`、`cdn.shopify.com`、`prodenv-merchant-public.s3.us-west-2.amazonaws.com` 在扩展后台读取，避免网页跨域限制；不申请其他网站的图片访问权限。
 - 「一键优化」：按品类规范调用 AI（Anthropic / OpenAI / DeepSeek / 公司 AI 网关 四选一）生成建议 Title/Description，侧边栏里每项都配「复制」和「一键填入」两个按钮——「一键填入」会把内容填进 EH 页面 Editor 的输入框（如同手动输入），但不会点击 EH 自己的保存/提交按钮，填入后仍需你自己确认并保存。需要在设置面板里选择服务商并自行配置对应的 API Key。品类识别会先看页面的品类字段，识别不出来再从商品标题/描述里猜，还是猜不出来才需要手动选择。
 
+## 每日定时巡检（可选，v0.35.0 起）
+
+- 连上本机 Loop 中台（agent-autoloop）后，每天 8:30 由 Loop 叫醒插件，插件单独开一个 EH 窗口，依次巡检 Catalogue、Pricing、Order，统计口径与侧边栏「一键巡检」相同，结果写进侧边栏当天记录，并把只含非零待办的日报交给 Loop 发到飞书。
+- 全程只读：只切换 Merchant 和待办 tab、读总数；分段运行（每段约 2.5 分钟，Loop 20 秒后叫醒接着跑），中途被打断会从断点继续；选不中的 Merchant 跳过并在日报里写明；EH 登录过期时飞书会收到卡片，登录后点「已登录，接着巡检」继续。
+- 设置：`chrome://extensions` → EH Assistant → 详细信息 → 扩展程序选项，填 Loop 地址、接单名 `eh-extension`、接单密钥并勾选启用。不填即关闭，其他功能不受影响；密钥只发往本机地址。
+- 代码：`shared/daily-scan.js`（巡检）、`shared/loop-worker.js`（Loop 接单）、`background.js` 末尾（接线）、`options.html` / `options.js`（连接设置）。
+
 ## 使用方式
 
 1. 打开 Chrome 的 `chrome://extensions/`。
