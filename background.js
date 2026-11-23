@@ -198,7 +198,7 @@ async function dailyScanJob(job) {
         later: [{ key: "eh-daily", at: new Date(Date.now() + 20000).toISOString(), about: "接着巡检剩下的 Merchant" }]
       };
     }
-    const report = EHDailyScan.buildFeishuReport(r.results, { yesterdayTotal: await dailyScan.yesterdayTotal(r.day), skipped: r.skipped });
+    const report = EHDailyScan.buildFeishuReport(r.results, { yesterdayTotal: await dailyScan.yesterdayTotal(r.day), skipped: r.skipped, startedAt: r.startedAt, finishedAt: r.finishedAt });
     return {
       outcome: "done",
       summary: "EH 巡检完成（" + r.day + "）：待办 " + report.total + " 项，涉及 " + report.merchantCount + " 个 Merchant" + (r.skipped.length ? "，" + r.skipped.length + " 处没读成" : ""),
@@ -217,6 +217,19 @@ async function dailyScanJob(job) {
   }
 }
 
+// 重发今天的日报：直接用侧边栏里今天的巡检记录重新生成，不重新巡检
+async function resendReportJob() {
+  const day = EHDailyScan.dateKey(new Date());
+  const stored = await dailyScan.storedResults(day);
+  if (!stored) return { outcome: "nothing", summary: "没事可做：今天还没有巡检记录" };
+  const report = EHDailyScan.buildFeishuReport(stored.results, { yesterdayTotal: await dailyScan.yesterdayTotal(day) });
+  return {
+    outcome: "done",
+    summary: "已重发今天的 EH 日报：待办 " + report.total + " 项，涉及 " + report.merchantCount + " 个 Merchant",
+    notice: [{ title: "EH 每日待办 " + day, text: report.text, key: "eh-daily-report-resend|" + Date.now(), fyi: true }]
+  };
+}
+
 const loopWorker = LoopWorker.create({
   getSettings: async () => (await chrome.storage.local.get("loop")).loop,
   setStatus: s => chrome.storage.local.set({ loopStatus: s }),
@@ -224,7 +237,9 @@ const loopWorker = LoopWorker.create({
     "eh.ping": async () => ({ outcome: "done", summary: "收到：EH Assistant 在线（v" + chrome.runtime.getManifest().version + "）" }),
     "eh.scan.daily": dailyScanJob,
     "rule:EH·每日巡检": dailyScanJob,
-    "rule:EH·巡检(手动)": dailyScanJob
+    "rule:EH·巡检(手动)": dailyScanJob,
+    "eh.report.resend": resendReportJob,
+    "rule:EH·重发今日日报(手动)": resendReportJob
   }
 });
 function ensureLoop() {

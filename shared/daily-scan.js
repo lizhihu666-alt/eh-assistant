@@ -63,34 +63,66 @@
     return dateKey(new Date(y, m - 1, d + days));
   }
 
-  /** 生成发到飞书的日报：只列有待办的 Merchant；文字要短，飞书卡片放得下 */
+  // 飞书卡片（JSON 2.0）的 markdown 支持表格：每个模块一张表，Merchant 一行，按待办多少排序
+  const MAX_ROWS_PER_MODULE = 15;
+  const GREY = (t) => "<font color='grey'>" + t + "</font>";
+  // 表头用短名，手机上一行放得下；和 EH 页面上的 tab 名一一对应
+  const SHORT = {
+    catalogue: ["New", "To Audit", "Sync Fail"],
+    pricing: ["To Update", "Failed", "Cost Audit"],
+    order: ["Awaiting", "Partial", "Canceled"],
+  };
+  const cell = (n) => (n > 0 ? "**" + n + "**" : "-");
+  const safe = (s) => String(s).replace(/\|/g, "/");
+
+  /** 生成发到飞书的日报：只列有待办的 Merchant，按待办多少排序；返回 { text, total, merchantCount } */
   function buildFeishuReport(results, opts) {
     const o = opts || {};
-    const lines = [];
     let total = 0;
     const merchants = new Set();
     const sections = [];
     for (const mod of ["catalogue", "pricing", "order"]) {
-      const rows = (results[mod] || []).filter((r) => FIELDS[mod].some(([f]) => Number(r[f] || 0) > 0));
+      const rows = (results[mod] || [])
+        .map((r) => {
+          const nums = FIELDS[mod].map(([f]) => Number(r[f] || 0));
+          return { merchant: r.merchant, nums, sum: nums.reduce((s, x) => s + x, 0) };
+        })
+        .filter((r) => r.sum > 0)
+        .sort((a, b) => b.sum - a.sum || String(a.merchant).localeCompare(String(b.merchant)));
       if (!rows.length) continue;
-      const out = [MODULES.find((m) => m.id === mod).label + "（" + rows.length + " 个 Merchant）"];
-      rows.sort((a, b) => String(a.merchant).localeCompare(String(b.merchant)));
-      for (const r of rows) {
-        merchants.add(r.merchant);
-        const parts = FIELDS[mod].filter(([f]) => Number(r[f] || 0) > 0).map(([f, name]) => { total += Number(r[f]); return name + " " + r[f]; });
-        out.push("· " + r.merchant + "：" + parts.join("、"));
+      const modSum = rows.reduce((s, r) => s + r.sum, 0);
+      total += modSum;
+      rows.forEach((r) => merchants.add(r.merchant));
+      const label = MODULES.find((m) => m.id === mod).label;
+      const out = ["**" + label + "**　" + GREY(rows.length + " 个 Merchant · 共 " + modSum + " 项"), ""];
+      out.push("| Merchant | " + SHORT[mod].join(" | ") + " | 合计 |");
+      out.push("| :-: | :-: | :-: | :-: | :-: |"); // 全部居中（飞书表格的表头对齐跟着整列走）
+      for (const r of rows.slice(0, MAX_ROWS_PER_MODULE)) {
+        out.push("| " + safe(r.merchant) + " | " + r.nums.map(cell).join(" | ") + " | " + r.sum + " |");
+      }
+      if (rows.length > MAX_ROWS_PER_MODULE) {
+        const rest = rows.slice(MAX_ROWS_PER_MODULE);
+        out.push("", GREY("另有 " + rest.length + " 个 Merchant 共 " + rest.reduce((s, r) => s + r.sum, 0) + " 项，见 EH Assistant 侧边栏"));
       }
       sections.push(out.join("\n"));
     }
-    let head = "待办合计 " + total + " 项，涉及 " + merchants.size + " 个 Merchant";
+
+    const lines = [];
+    let head = "**待办合计 " + total + " 项**　涉及 " + merchants.size + " 个 Merchant";
     if (Number.isFinite(o.yesterdayTotal)) {
       const diff = total - o.yesterdayTotal;
-      head += diff === 0 ? "，和昨天持平" : diff > 0 ? "，比昨天多 " + diff + " 项" : "，比昨天少 " + -diff + " 项";
+      head += "　" + (diff === 0 ? GREY("和昨天持平") : diff > 0 ? "<font color='red'>比昨天多 " + diff + " 项</font>" : "<font color='green'>比昨天少 " + -diff + " 项</font>");
     }
     lines.push(head);
-    if (o.skipped && o.skipped.length) lines.push("有 " + o.skipped.length + " 处没读成（已跳过）：" + o.skipped.slice(0, 5).join("；") + (o.skipped.length > 5 ? "…" : ""));
+    if (o.skipped && o.skipped.length) {
+      lines.push("", "<font color='orange'>有 " + o.skipped.length + " 处没读成，已跳过：</font>" + GREY(o.skipped.slice(0, 3).join("；") + (o.skipped.length > 3 ? "…" : "")));
+    }
     if (!sections.length) lines.push("", "今天没有待办。");
-    else lines.push("", sections.join("\n\n"));
+    else for (const s of sections) lines.push("", s);
+    const foot = [];
+    if (o.startedAt && o.finishedAt) foot.push(new Date(o.startedAt).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" }) + " 开始巡检，用时 " + Math.max(1, Math.round((o.finishedAt - o.startedAt) / 60000)) + " 分钟");
+    foot.push("只读巡检，没有改动 EH 数据");
+    lines.push("", GREY(foot.join(" · ")));
     let text = lines.join("\n");
     if (text.length > 3800) text = text.slice(0, 3800) + "\n…（太长了，其余请在 EH Assistant 侧边栏里看）";
     return { text, total, merchantCount: merchants.size };
@@ -357,7 +389,7 @@
       if (state.windowId != null) await chrome.windows.remove(state.windowId).catch(() => {});
       await chrome.storage.local.remove(STATE_KEY);
       const snapshots = await storeSnapshots(state.day, state.results);
-      return { done: true, day: state.day, results: state.results, skipped: state.skipped, snapshots };
+      return { done: true, day: state.day, results: state.results, skipped: state.skipped, snapshots, startedAt: state.startedAt, finishedAt: now() };
     }
 
     function describe(state) {
@@ -393,7 +425,14 @@
       await chrome.storage.local.remove(STATE_KEY);
     }
 
-    return { runChunk, yesterdayTotal, abort, load };
+    async function storedResults(day) {
+      const snaps = (await chrome.storage.local.get("ehAssistant:" + day))["ehAssistant:" + day] || [];
+      const res = resultsFromSnapshots(snaps);
+      const times = snaps.map((x) => Date.parse(x.scannedAt)).filter(Number.isFinite);
+      return Object.keys(res).length ? { results: res, finishedAt: times.length ? Math.max(...times) : null } : null;
+    }
+
+    return { runChunk, yesterdayTotal, abort, load, storedResults };
   }
 
   const api = { create, buildFeishuReport, totalOf, resultsFromSnapshots, dateKey, shiftDateKey, MODULES, STATE_KEY };
